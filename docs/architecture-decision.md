@@ -157,7 +157,7 @@ https://opencode.ai/zen/go/v1/chat/completions
 3. bridge fixtures 证明 Responses input、function tools、tool call delta、tool result continuation、SSE terminal event 和 usage 转换。
 4. bridge `doctor` 证明请求实际映射到 `deepseek-v4-flash`，且 GPT-family 请求 fail closed。
 5. 一次显式授权的小额 live smoke：OpenAI parent 原生 spawn 指定 child，child 收到随机 marker、完成一个无写入工具调用并通过 native callback 返回；同时回查 child thread 的 provider/model 与实际 permission profile 元数据。
-6. cancel、超时、bridge 重启后的状态丢失均明确失败，不静默换模型、直连 API 或继承 parent 历史。
+6. cancel 与超时均明确失败；bridge 重启后只从私有 SQLite 恢复已提交的 continuation state，缺失状态时明确失败，不静默换模型、直连 API 或继承 parent 历史。
 
 ## 最终决策
 

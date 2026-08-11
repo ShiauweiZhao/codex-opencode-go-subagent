@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,8 @@ AGENTS_END = "<!-- codex-opencode-go-subagent:end -->"
 AGENT_NAME = "v4_flash_worker"
 HOOK_MATCHER = f"^{AGENT_NAME}$"
 MANIFEST_RELATIVE = Path("opencode-go-subagent") / "install-manifest.json"
+SERVICE_PLACEHOLDER = "__CODEX_OPENCODE_GO_SERVICE__"
+PYTHON_PLACEHOLDER = "__PYTHON_EXECUTABLE__"
 
 
 def _sha256(data: bytes) -> str:
@@ -79,7 +82,37 @@ def _managed_sources(repo_root: Path) -> list[tuple[Path, Path, int]]:
             0o700,
         )
     )
+    sources.append(
+        (
+            repo_root / "scripts" / "codex-opencode-go-service",
+            Path("opencode-go-subagent") / "bin" / "codex-opencode-go-service",
+            0o700,
+        )
+    )
     return sources
+
+
+def _source_data(source: Path, relative: Path, codex_home: Path) -> bytes:
+    data = source.read_bytes()
+    if relative == Path("agents") / "v4-flash-worker.toml":
+        service_path = (
+            codex_home / "opencode-go-subagent" / "bin" / "codex-opencode-go-service"
+        )
+        escaped = str(service_path).replace("\\", "\\\\").replace('"', '\\"')
+        data = data.replace(SERVICE_PLACEHOLDER.encode(), escaped.encode())
+    if relative in {
+        Path("opencode-go-subagent") / "bin" / "codex-opencode-go-bridge",
+        Path("opencode-go-subagent") / "bin" / "codex-opencode-go-service",
+    }:
+        escaped_python = (
+            str(Path(sys.executable))
+            .replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("$", "\\$")
+            .replace("`", "\\`")
+        )
+        data = data.replace(PYTHON_PLACEHOLDER.encode(), escaped_python.encode())
+    return data
 
 
 def _load_hooks(path: Path) -> JSON:
@@ -178,7 +211,8 @@ def install(repo_root: Path, codex_home: Path) -> JSON:
         if not source.is_file():
             raise RuntimeError(f"missing install source: {source}")
         destination = codex_home / relative
-        if not destination.exists() or destination.read_bytes() == source.read_bytes():
+        data = _source_data(source, relative, codex_home)
+        if not destination.exists() or destination.read_bytes() == data:
             continue
         expected_old = old_files.get(str(relative))
         if not expected_old or _sha256(destination.read_bytes()) != expected_old:
@@ -195,7 +229,7 @@ def install(repo_root: Path, codex_home: Path) -> JSON:
     merged_agents = _replace_agents_block(existing_agents, block)
 
     for source, relative, mode in sources:
-        data = source.read_bytes()
+        data = _source_data(source, relative, codex_home)
         destination = codex_home / relative
         changed = _atomic_write(destination, data, mode) or changed
         manifest_files[str(relative)] = _sha256(data)
@@ -221,8 +255,25 @@ def install(repo_root: Path, codex_home: Path) -> JSON:
     }
 
 
-def uninstall(codex_home: Path) -> JSON:
+def uninstall(
+    codex_home: Path,
+    *,
+    service_manager=None,
+    purge_secrets: bool = False,
+) -> JSON:
     codex_home = Path(codex_home).expanduser().resolve()
+    service_report: JSON = {
+        "status": "not_managed",
+        "secrets_preserved": True,
+    }
+    if service_manager is None and sys.platform == "darwin":
+        default_codex_home = (Path.home() / ".codex").resolve()
+        if codex_home == default_codex_home:
+            from .managed_service import service_for_codex_home
+
+            service_manager = service_for_codex_home(codex_home)
+    if service_manager is not None:
+        service_report = service_manager.uninstall(purge_secrets=purge_secrets)
     manifest_path = codex_home / MANIFEST_RELATIVE
     preserved: list[str] = []
     removed: list[str] = []
@@ -251,7 +302,12 @@ def uninstall(codex_home: Path) -> JSON:
 
     if manifest_path.exists():
         manifest_path.unlink()
-    return {"status": "uninstalled", "removed": removed, "preserved_modified": preserved}
+    return {
+        "status": "uninstalled",
+        "removed": removed,
+        "preserved_modified": preserved,
+        "service": service_report,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -259,7 +315,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("action", choices=("install", "uninstall"), nargs="?", default="install")
     parser.add_argument("--codex-home", type=Path, default=Path.home() / ".codex")
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument("--purge-secrets", action="store_true")
     args = parser.parse_args(argv)
-    report = install(args.repo_root, args.codex_home) if args.action == "install" else uninstall(args.codex_home)
+    report = (
+        install(args.repo_root, args.codex_home)
+        if args.action == "install"
+        else uninstall(args.codex_home, purge_secrets=args.purge_secrets)
+    )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

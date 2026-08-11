@@ -6,8 +6,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
+import codex_opencode_go_bridge.installer as installer_module
 from codex_opencode_go_bridge.installer import install, uninstall
 
 
@@ -57,6 +59,15 @@ class InstallerTests(unittest.TestCase):
         self.assertIn('wire_api = "responses"', agent)
         self.assertIn("http://127.0.0.1:4141/v1", agent)
         self.assertNotIn("OPENCODE_GO_API_KEY", agent)
+        self.assertNotIn('env_key = "CODEX_OPENCODE_BRIDGE_TOKEN"', agent)
+        self.assertIn("[model_providers.opencode_go_bridge.auth]", agent)
+        expected_service = (
+            self.codex_home
+            / "opencode-go-subagent"
+            / "bin"
+            / "codex-opencode-go-service"
+        ).resolve()
+        self.assertIn(f'command = "{expected_service}"', agent)
         self.assertNotIn("sandbox_mode", agent)
         self.assertIn("reapply the parent turn's runtime permission profile", agent)
 
@@ -68,10 +79,22 @@ class InstallerTests(unittest.TestCase):
             / "server.py"
         )
         launcher = self.codex_home / "opencode-go-subagent" / "bin" / "codex-opencode-go-bridge"
+        service_launcher = (
+            self.codex_home
+            / "opencode-go-subagent"
+            / "bin"
+            / "codex-opencode-go-service"
+        )
         self.assertTrue(runtime.is_file())
         self.assertTrue(launcher.is_file())
+        self.assertTrue(service_launcher.is_file())
         self.assertTrue(launcher.stat().st_mode & 0o100)
+        self.assertTrue(service_launcher.stat().st_mode & 0o100)
         self.assertIn("codex_opencode_go_bridge", launcher.read_text())
+        self.assertIn(sys.executable, launcher.read_text())
+        self.assertIn(sys.executable, service_launcher.read_text())
+        self.assertNotIn("__PYTHON_EXECUTABLE__", launcher.read_text())
+        self.assertNotIn("__PYTHON_EXECUTABLE__", service_launcher.read_text())
 
         hooks = json.loads((self.codex_home / "hooks.json").read_text())
         self.assertIn("PostToolUse", hooks["hooks"])
@@ -91,7 +114,20 @@ class InstallerTests(unittest.TestCase):
 
     def test_uninstall_removes_only_managed_files_and_hook(self):
         install(self.repo_root, self.codex_home)
-        report = uninstall(self.codex_home)
+
+        class FakeManagedService:
+            def __init__(self):
+                self.calls = []
+
+            def uninstall(self, *, purge_secrets):
+                self.calls.append(purge_secrets)
+                return {
+                    "status": "uninstalled",
+                    "secrets_preserved": not purge_secrets,
+                }
+
+        service = FakeManagedService()
+        report = uninstall(self.codex_home, service_manager=service)
 
         self.assertEqual(report["status"], "uninstalled")
         self.assertFalse((self.codex_home / "agents" / "v4-flash-worker.toml").exists())
@@ -113,6 +149,40 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual((self.codex_home / "AGENTS.md").read_text(), "existing instructions\n")
         self.assertEqual(digest(self.codex_home / "config.toml"), self.config_digest)
         self.assertEqual(digest(self.codex_home / "auth.json"), self.auth_digest)
+        self.assertEqual(service.calls, [False])
+        self.assertTrue(report["service"]["secrets_preserved"])
+
+    def test_uninstall_only_purges_keychain_when_explicitly_requested(self):
+        class FakeManagedService:
+            def __init__(self):
+                self.calls = []
+
+            def uninstall(self, *, purge_secrets):
+                self.calls.append(purge_secrets)
+                return {
+                    "status": "uninstalled",
+                    "secrets_preserved": not purge_secrets,
+                }
+
+        install(self.repo_root, self.codex_home)
+        service = FakeManagedService()
+
+        report = uninstall(
+            self.codex_home,
+            service_manager=service,
+            purge_secrets=True,
+        )
+
+        self.assertEqual(service.calls, [True])
+        self.assertFalse(report["service"]["secrets_preserved"])
+
+    def test_uninstall_without_service_manager_is_portable_off_macos(self):
+        install(self.repo_root, self.codex_home)
+
+        with patch.object(installer_module.sys, "platform", "linux"):
+            report = uninstall(self.codex_home)
+
+        self.assertEqual(report["service"]["status"], "not_managed")
 
     def test_repository_install_script_runs_without_preconfigured_pythonpath(self):
         env = dict(os.environ)

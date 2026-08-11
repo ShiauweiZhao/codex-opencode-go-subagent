@@ -10,4 +10,4 @@ else
   export PYTHONPATH="$RUNTIME_DIR"
 fi
 
-exec "__PYTHON_EXECUTABLE__" -m codex_opencode_go_bridge "$@"
+exec "__PYTHON_EXECUTABLE__" -m codex_opencode_go_bridge.managed_service "$@"

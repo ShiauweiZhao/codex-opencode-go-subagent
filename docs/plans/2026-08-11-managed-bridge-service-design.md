@@ -54,8 +54,8 @@ ordinary reinstall cannot accidentally destroy the user's upstream key.
 
 ## Verification
 
-Tests are written before production changes. Unit tests cover secret-free
-subprocess arguments, Keychain parsing and failures, plist contents, generated
+Tests are written before production changes. Unit tests cover native Keychain
+backend delegation and redacted failures, plist contents, generated
 agent command-auth, idempotent lifecycle commands, status redaction, installer
 upgrade, uninstall preservation, and explicit secret purge. Integration tests
 run the service entry point with temporary credentials and a fake upstream; they

@@ -23,8 +23,9 @@ description: Use the OpenCode Go backed v4_flash_worker through the installed on
 
 ## Deliver one self-contained job
 
-1. Confirm `http://127.0.0.1:4141/healthz` is healthy. Do not call the paid
-   upstream merely to test health.
+1. Confirm `http://127.0.0.1:4141/healthz` is healthy. On macOS, use the
+   installed `codex-opencode-go-service doctor` if it is not. Do not call the
+   paid upstream merely to test health or start a separate foreground bridge.
 2. Build one complete assignment containing child identity, objective, scope,
    exclusions, inherited permission caveat, explicit no-write rule,
    evidence/output contract, and stopping condition.

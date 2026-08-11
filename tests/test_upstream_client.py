@@ -1,4 +1,5 @@
 import json
+import socket
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -77,6 +78,25 @@ class OpenCodeGoClientSecurityTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.status, 302)
         self.assertEqual(SinkHandler.requests, [])
+
+    def test_reports_upstream_timeout_explicitly(self):
+        class TimeoutOpener:
+            def open(self, request, timeout):
+                raise socket.timeout("timed out with upstream-secret")
+
+        config = BridgeConfig(
+            upstream_api_key="upstream-secret",
+            local_token="local-secret",
+        )
+        client = OpenCodeGoClient(config)
+        client._opener = TimeoutOpener()
+
+        with self.assertRaises(UpstreamError) as caught:
+            client.complete({"model": "deepseek-v4-flash", "messages": [], "stream": False})
+
+        self.assertEqual(caught.exception.status, 504)
+        self.assertEqual(str(caught.exception), "OpenCode Go request timed out")
+        self.assertNotIn("upstream-secret", str(caught.exception))
 
 
 if __name__ == "__main__":
