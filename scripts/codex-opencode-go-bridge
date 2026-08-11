@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+RUNTIME_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../runtime" && pwd)
+
+if [ -n "${PYTHONPATH:-}" ]; then
+  export PYTHONPATH="$RUNTIME_DIR:$PYTHONPATH"
+else
+  export PYTHONPATH="$RUNTIME_DIR"
+fi
+
+exec python3 -m codex_opencode_go_bridge "$@"

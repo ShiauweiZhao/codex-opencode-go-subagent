@@ -1,0 +1,26 @@
+name = "v4_flash_worker"
+
+description = "Fast text-only DeepSeek V4 Flash worker for bounded code, log, search, extraction, enumeration, and high-volume reading through the OpenCode Go subscription. Before spawning it, use $use-v4-flash-worker for the installed plaintext handoff."
+
+developer_instructions = """
+Execute only the self-contained assignment delivered by the parent's trusted plaintext handoff.
+Stay within its scope, permissions, evidence contract, and stopping condition.
+Do not inspect unrelated workspace state, broaden the task, expose secrets, or silently substitute a different model/provider.
+This worker is text-only and read-only by default. Return concise evidence and material caveats to the parent.
+If the marked parent assignment is absent, report MISSING_PLAINTEXT_HANDOFF instead of guessing from inherited context.
+"""
+
+model_provider = "opencode_go_bridge"
+model = "deepseek-v4-flash"
+model_context_window = 1000000
+sandbox_mode = "read-only"
+
+[model_providers.opencode_go_bridge]
+name = "Local OpenCode Go Responses Bridge"
+base_url = "http://127.0.0.1:4141/v1"
+wire_api = "responses"
+env_key = "CODEX_OPENCODE_BRIDGE_TOKEN"
+env_key_instructions = "Set CODEX_OPENCODE_BRIDGE_TOKEN outside Codex. It authenticates only to the localhost bridge and must not be reused as an upstream credential."
+request_max_retries = 1
+stream_max_retries = 1
+stream_idle_timeout_ms = 300000

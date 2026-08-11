@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codex-opencode-go-subagent"
+version = "0.1.0"
+description = "Use OpenCode Go DeepSeek V4 Flash as a native read-only Codex subagent"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+authors = [{name = "ShiauweiZhao"}]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/ShiauweiZhao/codex-opencode-go-subagent"
+Repository = "https://github.com/ShiauweiZhao/codex-opencode-go-subagent"
+
+[project.scripts]
+codex-opencode-go-bridge = "codex_opencode_go_bridge.server:main"
+codex-opencode-go-install = "codex_opencode_go_bridge.installer:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

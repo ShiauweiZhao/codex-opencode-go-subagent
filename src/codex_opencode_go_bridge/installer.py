@@ -1,0 +1,265 @@
+"""Conservative installer for the custom agent, skill, and plaintext Hook."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import tempfile
+from pathlib import Path
+from typing import Any
+
+
+JSON = dict[str, Any]
+AGENTS_START = "<!-- codex-opencode-go-subagent:start -->"
+AGENTS_END = "<!-- codex-opencode-go-subagent:end -->"
+AGENT_NAME = "v4_flash_worker"
+HOOK_MATCHER = f"^{AGENT_NAME}$"
+MANIFEST_RELATIVE = Path("opencode-go-subagent") / "install-manifest.json"
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _atomic_write(path: Path, data: bytes, mode: int = 0o600) -> bool:
+    if path.exists() and path.read_bytes() == data:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+    return True
+
+
+def _managed_sources(repo_root: Path) -> list[tuple[Path, Path, int]]:
+    sources: list[tuple[Path, Path, int]] = [
+        (
+            repo_root / "agents" / "v4-flash-worker.toml",
+            Path("agents") / "v4-flash-worker.toml",
+            0o600,
+        ),
+        (
+            repo_root / "hooks" / "plaintext_handoff.py",
+            Path("hooks") / "codex-opencode-go-subagent" / "plaintext_handoff.py",
+            0o700,
+        ),
+    ]
+    skill_root = repo_root / "skills" / "use-v4-flash-worker"
+    for source in sorted(path for path in skill_root.rglob("*") if path.is_file()):
+        sources.append((source, Path("skills") / "use-v4-flash-worker" / source.relative_to(skill_root), 0o600))
+    package_root = repo_root / "src" / "codex_opencode_go_bridge"
+    for source in sorted(path for path in package_root.rglob("*.py") if path.is_file()):
+        sources.append(
+            (
+                source,
+                Path("opencode-go-subagent")
+                / "runtime"
+                / "codex_opencode_go_bridge"
+                / source.relative_to(package_root),
+                0o600,
+            )
+        )
+    sources.append(
+        (
+            repo_root / "scripts" / "codex-opencode-go-bridge",
+            Path("opencode-go-subagent") / "bin" / "codex-opencode-go-bridge",
+            0o700,
+        )
+    )
+    return sources
+
+
+def _load_hooks(path: Path) -> JSON:
+    if not path.exists():
+        return {"description": "Codex user hooks", "hooks": {}}
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"cannot parse existing hooks.json: {error}") from error
+    if not isinstance(payload, dict) or not isinstance(payload.get("hooks", {}), dict):
+        raise RuntimeError("existing hooks.json must contain an object-valued hooks field")
+    payload.setdefault("hooks", {})
+    return payload
+
+
+def _hook_entry(script_path: Path) -> JSON:
+    escaped = str(script_path).replace('"', '\\"')
+    return {
+        "matcher": HOOK_MATCHER,
+        "hooks": [
+            {
+                "type": "command",
+                "command": f'python3 "{escaped}" --mode hook',
+                "timeout": 10,
+                "statusMessage": "Delivering the staged OpenCode Go Flash assignment",
+                "additionalContextLimit": 0,
+            }
+        ],
+    }
+
+
+def _merge_hook(payload: JSON, entry: JSON) -> JSON:
+    events = payload.setdefault("hooks", {})
+    current = events.get("SubagentStart") or []
+    if not isinstance(current, list):
+        raise RuntimeError("hooks.SubagentStart must be a list")
+    kept = [item for item in current if not isinstance(item, dict) or item.get("matcher") != HOOK_MATCHER]
+    events["SubagentStart"] = kept + [entry]
+    return payload
+
+
+def _remove_hook(payload: JSON) -> JSON:
+    events = payload.setdefault("hooks", {})
+    current = events.get("SubagentStart") or []
+    if isinstance(current, list):
+        kept = [item for item in current if not isinstance(item, dict) or item.get("matcher") != HOOK_MATCHER]
+        if kept:
+            events["SubagentStart"] = kept
+        else:
+            events.pop("SubagentStart", None)
+    return payload
+
+
+def _replace_agents_block(existing: str, block: str | None) -> str:
+    start = existing.find(AGENTS_START)
+    if start >= 0:
+        end = existing.find(AGENTS_END, start)
+        if end < 0:
+            raise RuntimeError("AGENTS.md contains an unterminated managed block")
+        end += len(AGENTS_END)
+        if end < len(existing) and existing[end] == "\n":
+            end += 1
+        prefix = existing[:start]
+        if prefix.endswith("\n\n"):
+            prefix = prefix[:-1]
+        existing = prefix + existing[end:]
+    if block is None:
+        return existing
+    prefix = existing
+    if prefix and not prefix.endswith("\n"):
+        prefix += "\n"
+    if prefix and not prefix.endswith("\n\n"):
+        prefix += "\n"
+    return prefix + block.rstrip() + "\n"
+
+
+def install(repo_root: Path, codex_home: Path) -> JSON:
+    repo_root = Path(repo_root).resolve()
+    codex_home = Path(codex_home).expanduser().resolve()
+    changed = False
+    manifest_files: dict[str, str] = {}
+    manifest_path = codex_home / MANIFEST_RELATIVE
+    old_manifest: JSON = {}
+    if manifest_path.exists():
+        try:
+            old_manifest = json.loads(manifest_path.read_text())
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"cannot parse existing install manifest: {error}") from error
+    old_files = old_manifest.get("managed_files") or {}
+    sources = _managed_sources(repo_root)
+
+    # Validate every managed target before the first write. Existing identical
+    # files may be adopted; different files must either match our prior manifest
+    # or be resolved explicitly by the user.
+    for source, relative, _mode in sources:
+        if not source.is_file():
+            raise RuntimeError(f"missing install source: {source}")
+        destination = codex_home / relative
+        if not destination.exists() or destination.read_bytes() == source.read_bytes():
+            continue
+        expected_old = old_files.get(str(relative))
+        if not expected_old or _sha256(destination.read_bytes()) != expected_old:
+            raise RuntimeError(f"refusing to overwrite unmanaged or modified file: {destination}")
+
+    hooks_path = codex_home / "hooks.json"
+    hooks = _merge_hook(
+        _load_hooks(hooks_path),
+        _hook_entry(codex_home / "hooks" / "codex-opencode-go-subagent" / "plaintext_handoff.py"),
+    )
+    agents_path = codex_home / "AGENTS.md"
+    existing_agents = agents_path.read_text() if agents_path.exists() else ""
+    block = (repo_root / "snippets" / "AGENTS.md").read_text()
+    merged_agents = _replace_agents_block(existing_agents, block)
+
+    for source, relative, mode in sources:
+        data = source.read_bytes()
+        destination = codex_home / relative
+        changed = _atomic_write(destination, data, mode) or changed
+        manifest_files[str(relative)] = _sha256(data)
+
+    hooks_data = (json.dumps(hooks, ensure_ascii=False, indent=2) + "\n").encode()
+    changed = _atomic_write(hooks_path, hooks_data, 0o600) or changed
+
+    changed = _atomic_write(agents_path, merged_agents.encode(), 0o600) or changed
+
+    manifest = {
+        "schema_version": 1,
+        "managed_files": manifest_files,
+        "hook_matcher": HOOK_MATCHER,
+        "agent": AGENT_NAME,
+    }
+    manifest_data = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode()
+    changed = _atomic_write(manifest_path, manifest_data, 0o600) or changed
+    return {
+        "status": "installed" if changed else "already_installed",
+        "codex_home": str(codex_home),
+        "hook_trust_required": True,
+        "paid_smoke_run": False,
+    }
+
+
+def uninstall(codex_home: Path) -> JSON:
+    codex_home = Path(codex_home).expanduser().resolve()
+    manifest_path = codex_home / MANIFEST_RELATIVE
+    preserved: list[str] = []
+    removed: list[str] = []
+    manifest: JSON = {}
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+    for relative, expected_hash in (manifest.get("managed_files") or {}).items():
+        target = codex_home / relative
+        if not target.exists():
+            continue
+        if _sha256(target.read_bytes()) != expected_hash:
+            preserved.append(relative)
+            continue
+        target.unlink()
+        removed.append(relative)
+
+    hooks_path = codex_home / "hooks.json"
+    if hooks_path.exists():
+        hooks = _remove_hook(_load_hooks(hooks_path))
+        _atomic_write(hooks_path, (json.dumps(hooks, ensure_ascii=False, indent=2) + "\n").encode(), 0o600)
+
+    agents_path = codex_home / "AGENTS.md"
+    if agents_path.exists():
+        cleaned = _replace_agents_block(agents_path.read_text(), None)
+        _atomic_write(agents_path, cleaned.encode(), 0o600)
+
+    if manifest_path.exists():
+        manifest_path.unlink()
+    return {"status": "uninstalled", "removed": removed, "preserved_modified": preserved}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Install the OpenCode Go Flash Codex subagent")
+    parser.add_argument("action", choices=("install", "uninstall"), nargs="?", default="install")
+    parser.add_argument("--codex-home", type=Path, default=Path.home() / ".codex")
+    parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
+    args = parser.parse_args(argv)
+    report = install(args.repo_root, args.codex_home) if args.action == "install" else uninstall(args.codex_home)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
