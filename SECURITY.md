@@ -5,6 +5,11 @@
 - `OPENCODE_GO_API_KEY` 只由本地 bridge 进程读取，用于访问 OpenCode Go。
 - `CODEX_OPENCODE_BRIDGE_TOKEN` 只用于 Codex → `127.0.0.1` bridge 的本地鉴权。
 - 两者必须不同。bridge 会拒绝复用同一个值。
+- macOS 托管模式把两者保存为登录 Keychain generic-password item；LaunchAgent
+  启动时通过原生 Security Framework 读取，不经 `security` 子进程或命令参数。
+- Codex 的 command-backed provider auth 只能取得本地 bearer，不能取得上游 key。
+- `configure` 和显式 `rotate-local-token` 会轮换本地 bearer；迁移旧安装时应先
+  `launchctl unsetenv CODEX_OPENCODE_BRIDGE_TOKEN`，避免 GUI-wide 凭据继续存在。
 - 不要把任一凭据放入 agent TOML、prompt、Hook assignment、仓库、Issue、日志或截图。
 - 默认上游 URL 必须为 HTTPS；只有 loopback 测试地址允许 HTTP。
 
@@ -29,6 +34,7 @@ plaintext Hook 的 pending assignment 也会短暂保存在当前用户 state �
 - GPT-family 或其他模型 ID 会 fail closed，不会转发给 OpenCode Go。
 - 不存在运行时 fallback。
 - `/healthz` 与 `/v1/models` 不调用上游，也不返回凭据；`/v1/responses` 必须携带本地 bearer。
+- macOS LaunchAgent plist 不含凭据，并在非正常退出后由 `launchd` 自动重启。
 
 ## External data boundary
 

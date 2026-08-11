@@ -4,7 +4,12 @@ import unittest
 from pathlib import Path
 
 
-from codex_opencode_go_bridge.server import BridgeConfig, BridgeService, ConfigError
+from codex_opencode_go_bridge.server import (
+    BridgeConfig,
+    BridgeService,
+    ConfigError,
+    UpstreamError,
+)
 from codex_opencode_go_bridge.state import SQLiteStateStore
 
 
@@ -16,6 +21,11 @@ class FakeUpstream:
     def complete(self, payload):
         self.requests.append(payload)
         return self.response
+
+
+class TimeoutUpstream:
+    def complete(self, payload):
+        raise UpstreamError(504, "OpenCode Go request timed out")
 
 
 class BridgeConfigTests(unittest.TestCase):
@@ -87,6 +97,21 @@ class BridgeServiceTests(unittest.TestCase):
         self.assertEqual(content_type, "application/json")
         self.assertEqual(json.loads(data)["error"]["type"], "authentication_error")
         self.assertEqual(upstream.requests, [])
+
+    def test_preserves_explicit_gateway_timeout_status(self):
+        service = BridgeService(self.config, self.store, TimeoutUpstream())
+
+        status, content_type, data = service.respond(
+            {"model": "deepseek-v4-flash", "input": "hello"},
+            authorization="Bearer local-secret",
+        )
+
+        self.assertEqual(status, 504)
+        self.assertEqual(content_type, "application/json")
+        self.assertEqual(
+            json.loads(data)["error"]["message"],
+            "OpenCode Go request timed out",
+        )
 
     def test_proxies_text_response_as_responses_sse_and_persists_state(self):
         upstream = FakeUpstream(
@@ -163,6 +188,71 @@ class BridgeServiceTests(unittest.TestCase):
         self.assertEqual(second.requests[0]["messages"][-1]["role"], "tool")
         self.assertEqual(second.requests[0]["messages"][-2]["reasoning_content"], "inspect")
         self.assertEqual(self._completed_response(second_data)["output"][0]["content"][0]["text"], "final")
+
+    def test_continues_tool_result_after_bridge_store_reopens(self):
+        first = FakeUpstream(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_after_restart",
+                                    "type": "function",
+                                    "function": {"name": "exec", "arguments": "{}"},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        )
+        service = BridgeService(self.config, self.store, first)
+        _, _, first_data = service.respond(
+            {
+                "model": "deepseek-v4-flash",
+                "input": "inspect",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "exec",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            },
+            authorization="Bearer local-secret",
+        )
+        first_id = self._completed_response(first_data)["id"]
+        state_path = self.store.path
+        self.store.close()
+
+        reopened_store = SQLiteStateStore(state_path)
+        self.addCleanup(reopened_store.close)
+        second = FakeUpstream({"choices": [{"message": {"content": "continued"}}]})
+        restarted_service = BridgeService(self.config, reopened_store, second)
+
+        status, _, second_data = restarted_service.respond(
+            {
+                "model": "deepseek-v4-flash",
+                "previous_response_id": first_id,
+                "input": [
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call_after_restart",
+                        "output": "ok",
+                    }
+                ],
+            },
+            authorization="Bearer local-secret",
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(second.requests[0]["messages"][-1]["role"], "tool")
+        self.assertEqual(
+            self._completed_response(second_data)["output"][0]["content"][0]["text"],
+            "continued",
+        )
 
     @staticmethod
     def _completed_response(data):

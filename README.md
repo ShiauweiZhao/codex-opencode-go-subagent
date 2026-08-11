@@ -18,8 +18,9 @@ Responses→Chat bridge，并复用经过并发/一次性交付测试的 plainte
 - 若需要操作系统级强制只读，请从 `read-only` parent 任务中 spawn；不要把 child
   的行为约束误当成 sandbox 证据。
 - 不使用 MCP、OpenCode CLI、第二个 Codex CLI 或完整 `opencode-bridge` runtime。
-- 上游 API key 只由 bridge 进程读取，不进入 agent TOML、Hook 状态或日志。
-- 当前首版支持 macOS/Linux POSIX 主链；bridge 会缓冲一个模型回合后再输出
+- macOS 上游 API key 与独立本地 bearer 存在登录 Keychain；LaunchAgent plist、
+  agent TOML、Hook 状态、进程参数和日志都不包含密钥值。
+- 当前支持 macOS 托管主链与 Linux 手动主链；bridge 会缓冲一个模型回合后再输出
   Responses SSE，不提供逐 token 展示。
 
 架构选型和上游比较见 [docs/architecture-decision.md](docs/architecture-decision.md)。
@@ -33,7 +34,7 @@ Responses→Chat bridge，并复用经过并发/一次性交付测试的 plainte
 
 ## 安装
 
-安装本身不读取 key、不启动 bridge、不调用付费 API，也不会改
+安装本身不读取 key、不调用付费 API，也不会改
 `~/.codex/config.toml` 或 `~/.codex/auth.json`：
 
 ```bash
@@ -47,42 +48,56 @@ python3 scripts/install.py install
 - `~/.codex/hooks/codex-opencode-go-subagent/plaintext_handoff.py`
 - `~/.codex/opencode-go-subagent/runtime/`
 - `~/.codex/opencode-go-subagent/bin/codex-opencode-go-bridge`
+- `~/.codex/opencode-go-subagent/bin/codex-opencode-go-service`
 - 精确匹配 `^v4_flash_worker$` 的 `SubagentStart` Hook
 - `~/.codex/AGENTS.md` 中的受管路由块
 
 已有 Hook 和 `AGENTS.md` 内容会被保留；重复安装是幂等的。安装器不会伪造
 Hook trust hash。
 
-## 启动 bridge
+## macOS 配置托管服务
 
-在可信 shell 或 secret manager 中准备两个不同的凭据：
+安装后执行一次：
+
+```bash
+~/.codex/opencode-go-subagent/bin/codex-opencode-go-service configure
+```
+
+命令会使用隐藏输入读取 OpenCode Go API key，生成不同的本地 bearer，把两者写入
+macOS 登录 Keychain，并安装、启动按用户运行的 LaunchAgent。正常使用不需要单独打开
+bridge 终端，也不需要 `launchctl setenv`。不要把真实 key 写进仓库、聊天、Issue、
+命令参数或截图。
+
+状态和无付费诊断：
+
+```bash
+~/.codex/opencode-go-subagent/bin/codex-opencode-go-service status
+~/.codex/opencode-go-subagent/bin/codex-opencode-go-service doctor
+curl -fsS http://127.0.0.1:4141/healthz
+```
+
+其他生命周期命令：
+
+```bash
+~/.codex/opencode-go-subagent/bin/codex-opencode-go-service start
+~/.codex/opencode-go-subagent/bin/codex-opencode-go-service stop
+~/.codex/opencode-go-subagent/bin/codex-opencode-go-service restart
+~/.codex/opencode-go-subagent/bin/codex-opencode-go-service rotate-local-token
+```
+
+provider 通过受管 service 命令只读取本地 bearer；上游 key 不会返回给 Codex。
+每次 `configure` 也会轮换本地 bearer，避免继承旧的 GUI-wide token。
+
+## Linux 手动启动
+
+Linux 尚未提供受测的 Secret Service/systemd 用户服务集成，暂时在可信 shell 或
+secret manager 中准备两个不同的值后显式启动：
 
 ```bash
 export OPENCODE_GO_API_KEY="..."
 export CODEX_OPENCODE_BRIDGE_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-```
-
-不要把真实值写进仓库、聊天、Issue 或截图。然后启动：
-
-```bash
 ~/.codex/opencode-go-subagent/bin/codex-opencode-go-bridge
 ```
-
-无付费健康检查：
-
-```bash
-curl -fsS http://127.0.0.1:4141/healthz
-```
-
-Codex Desktop 进程也必须能读到 `CODEX_OPENCODE_BRIDGE_TOKEN`。macOS 从 GUI
-启动时，可以在不把真实值写入命令历史的前提下把已导出的变量交给 launchd：
-
-```bash
-launchctl setenv CODEX_OPENCODE_BRIDGE_TOKEN "$CODEX_OPENCODE_BRIDGE_TOKEN"
-```
-
-随后退出并重新打开 Codex。`OPENCODE_GO_API_KEY` 只需要提供给 bridge，不需要
-提供给 Codex Desktop。
 
 ## 信任 Hook 与 smoke
 
@@ -109,6 +124,13 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 localhost 鉴权、私有 SQLite state、HTTP fake upstream、安装/卸载，以及 plaintext
 handoff 的原子发布、TTL、冲突、replay 和并发 at-most-once 行为。
 
+macOS Keychain 真机 round-trip 是显式 opt-in，使用随机临时条目并在测试后删除：
+
+```bash
+CODEX_OPENCODE_RUN_KEYCHAIN_TESTS=1 PYTHONPATH=src \
+  python3 -m unittest tests.test_managed_service.RealKeychainStoreTests -v
+```
+
 ## 卸载
 
 ```bash
@@ -116,11 +138,16 @@ python3 scripts/install.py uninstall
 ```
 
 卸载器只删除 manifest 中哈希仍匹配的受管文件；用户修改过的文件会保留。它会移除
-本仓库的 Hook 和 `AGENTS.md` 受管块，不碰主配置与登录。
+本仓库的 LaunchAgent、Hook 和 `AGENTS.md` 受管块，不碰主配置与登录。默认保留
+Keychain 凭据，明确需要删除时才使用：
+
+```bash
+python3 scripts/install.py uninstall --purge-secrets
+```
 
 ## 当前限制
 
-- 没有自动 daemon/launchd 管理；bridge 由用户显式启动和停止。
+- Linux 还没有 Secret Service/systemd 用户服务托管，需显式启动 bridge。
 - 没有 Windows PowerShell handoff。
 - 没有图像输入、模型 fallback、写工作区或多模型路由。
 - Codex 当前会让 native child 继承 parent 的运行时权限。仓库能约束任务路由和

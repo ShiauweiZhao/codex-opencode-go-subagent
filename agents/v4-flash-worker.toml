@@ -20,8 +20,12 @@ model_context_window = 1000000
 name = "Local OpenCode Go Responses Bridge"
 base_url = "http://127.0.0.1:4141/v1"
 wire_api = "responses"
-env_key = "CODEX_OPENCODE_BRIDGE_TOKEN"
-env_key_instructions = "Set CODEX_OPENCODE_BRIDGE_TOKEN outside Codex. It authenticates only to the localhost bridge and must not be reused as an upstream credential."
 request_max_retries = 1
 stream_max_retries = 1
 stream_idle_timeout_ms = 300000
+
+[model_providers.opencode_go_bridge.auth]
+command = "__CODEX_OPENCODE_GO_SERVICE__"
+args = ["print-bridge-token"]
+timeout_ms = 5000
+refresh_interval_ms = 300000

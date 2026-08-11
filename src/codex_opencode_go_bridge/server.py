@@ -131,15 +131,19 @@ class OpenCodeGoClient:
         try:
             with self._opener.open(request, timeout=self.timeout_seconds) as response:
                 raw = response.read(MAX_REQUEST_BYTES + 1)
+        except TimeoutError:
+            raise UpstreamError(504, "OpenCode Go request timed out") from None
         except urllib.error.HTTPError as error:
             try:
                 raw = error.read(64 * 1024)
             finally:
                 error.close()
             message = _safe_upstream_message(raw, self.api_key) or f"OpenCode Go returned HTTP {error.code}"
-            raise UpstreamError(error.code, message) from error
+            raise UpstreamError(error.code, message) from None
         except urllib.error.URLError as error:
-            raise UpstreamError(502, f"OpenCode Go connection failed: {error.reason}") from error
+            if isinstance(error.reason, TimeoutError):
+                raise UpstreamError(504, "OpenCode Go request timed out") from None
+            raise UpstreamError(502, "OpenCode Go connection failed") from None
         if len(raw) > MAX_REQUEST_BYTES:
             raise UpstreamError(502, "OpenCode Go response exceeded size limit")
         try:
@@ -213,7 +217,7 @@ class BridgeService:
         except ProtocolError as error:
             return _json_error(400, "invalid_request_error", str(error))
         except UpstreamError as error:
-            status = error.status if 400 <= error.status < 500 else 502
+            status = error.status if 400 <= error.status < 500 or error.status == 504 else 502
             return _json_error(status, "upstream_error", str(error))
         except Exception as error:
             print(f"bridge internal error: {type(error).__name__}", file=sys.stderr)

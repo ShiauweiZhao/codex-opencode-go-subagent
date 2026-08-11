@@ -19,6 +19,7 @@ Repository = "https://github.com/ShiauweiZhao/codex-opencode-go-subagent"
 [project.scripts]
 codex-opencode-go-bridge = "codex_opencode_go_bridge.server:main"
 codex-opencode-go-install = "codex_opencode_go_bridge.installer:main"
+codex-opencode-go-service = "codex_opencode_go_bridge.managed_service:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
