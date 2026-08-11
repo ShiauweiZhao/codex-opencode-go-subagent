@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "codex-opencode-go-subagent"
 version = "0.1.0"
-description = "Use OpenCode Go DeepSeek V4 Flash as a native read-only Codex subagent"
+description = "Use OpenCode Go DeepSeek V4 Flash as a native Codex subagent for bounded text tasks"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "Apache-2.0"}

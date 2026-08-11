@@ -1,7 +1,9 @@
 # Repository instructions
 
 - Keep the parent Codex model/provider and ChatGPT login unchanged.
-- Keep `v4_flash_worker` text-only and read-only by default.
+- Keep `v4_flash_worker` text-only and behaviorally no-write. Do not claim its
+  role TOML independently enforces a read-only sandbox: current Codex reapplies
+  the parent turn's runtime permission profile after role loading.
 - Maintain one explicit transport path: Codex Responses → localhost bridge →
   OpenCode Go Chat Completions. Do not add silent model or provider fallback.
 - Never read, print, persist in the repository, or place in command arguments

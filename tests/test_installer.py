@@ -57,6 +57,8 @@ class InstallerTests(unittest.TestCase):
         self.assertIn('wire_api = "responses"', agent)
         self.assertIn("http://127.0.0.1:4141/v1", agent)
         self.assertNotIn("OPENCODE_GO_API_KEY", agent)
+        self.assertNotIn("sandbox_mode", agent)
+        self.assertIn("reapply the parent turn's runtime permission profile", agent)
 
         runtime = (
             self.codex_home

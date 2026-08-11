@@ -8,10 +8,25 @@
 
 新仓库采用两部分已经被分别验证过的设计：
 
-1. **控制面以 `Utopia-V/codex-deepseek-subagent` 为蓝本**：保留“主 Agent 仍走 OpenAI / ChatGPT 登录、provider 只写在 standalone child agent TOML、`fork_turns="none"`、一次性 `SubagentStart` plaintext handoff、read-only 默认值、skill 路由、安装合同和本地协议测试”。
+1. **控制面以 `Utopia-V/codex-deepseek-subagent` 为蓝本**：保留“主 Agent 仍走 OpenAI / ChatGPT 登录、provider 只写在 standalone child agent TOML、`fork_turns="none"`、一次性 `SubagentStart` plaintext handoff、no-write 行为约束、skill 路由、安装合同和本地协议测试”。
 2. **传输面从 `goldtetsola/opencode-bridge` 提取最小必要代码**：只保留 Codex Responses API 到 OpenCode Go Chat Completions 的协议转换、SSE、function tool call / tool result、`previous_response_id` 状态和健康检查；删除 MissionV1、patch escrow、event log、fallback model、GPT passthrough、certification/canary 等与本需求无关的体系。
 
 不建议把 `oil-oil` 作为基础；也不建议直接采用完整 `opencode-bridge`。原因不是它们不可用，而是二者的变更半径分别过大、运行面过重。
+
+### Live smoke 后的权限修正
+
+真实 native child 已证明 provider/model 路由成功，但也暴露了一个必须写清的上游边界：
+当前 Codex 的 spawn 顺序是先加载 custom role，随后再次执行
+`apply_spawn_agent_runtime_overrides()`，把 parent turn 或 environment 的实时
+permission profile 写回 child。因此 agent TOML 中的 `sandbox_mode = "read-only"`
+会被覆盖，不能作为强制隔离。
+
+相关实现可直接核对 Codex 的
+[`multi_agents/spawn.rs`](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents/spawn.rs)
+与
+[`multi_agents_common.rs`](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents_common.rs)。
+本仓库因此移除该误导字段，把首版边界改为：worker developer policy 明确拒绝写入，
+parent 负责验证；需要操作系统级写拒绝时，必须从 read-only parent 任务中 spawn。
 
 ## 为什么必须有协议适配
 
@@ -71,7 +86,7 @@ OpenCode Go 使用 Chat Completions**。多出的本地进程换来了明确、�
 
 但该仓库的定位已经远超协议 bridge：MissionV1 A2-A6、runtime-owned tools、append-only event log、RunRecord、patch escrow、isolated worktree、review packet、certification、canary、scorecard、fallback 和 daemon supervisor 都是其产品的一部分。[README](https://github.com/goldtetsola/opencode-bridge/blob/61c79e5c18a04448f02a472ea8734fd0a134c0fb/README.md) [architecture](https://github.com/goldtetsola/opencode-bridge/blob/61c79e5c18a04448f02a472ea8734fd0a134c0fb/architecture.md)
 
-如果目标只是一个低成本、read-only 的 Flash 子 Agent，完整引入会让日常故障域从“agent + Hook + API”扩大为“agent + Hook + daemon + SQLite + runtime policy + artifacts + bridge version”。因此应移植其传输契约与相应测试，而不是继承整个 runtime。
+如果目标只是一个低成本、面向只读任务的 Flash 子 Agent，完整引入会让日常故障域从“agent + Hook + API”扩大为“agent + Hook + daemon + SQLite + runtime policy + artifacts + bridge version”。因此应移植其传输契约与相应测试，而不是继承整个 runtime。
 
 ## 推荐的最小架构
 
@@ -88,7 +103,8 @@ SubagentStart plaintext Hook（Utopia-V 模式）
 standalone child agent TOML
   model_provider = "opencode_go_bridge"
   model = "deepseek-v4-flash"
-  sandbox_mode = "read-only"
+  developer policy = no-write
+  runtime permissions = inherited from parent
   |
   | OpenAI Responses API
   v
@@ -110,7 +126,7 @@ https://opencode.ai/zen/go/v1/chat/completions
 - `tests/`：handoff 协议、转换 fixtures、SSE、工具续轮、安装等价性
 - `prompts/quick-smoke-test.md`：一次最小付费 native child 测试
 
-明确不做：修改顶层 `model` / `model_provider`、自定义全局 model catalog、关闭整个 session 的 V2、fallback 到其他模型、GPT passthrough、MCP、另一个 Codex CLI、MissionV1、自动写工作区。
+明确不做：修改顶层 `model` / `model_provider`、自定义全局 model catalog、关闭整个 session 的 V2、fallback 到其他模型、GPT passthrough、MCP、另一个 Codex CLI、MissionV1、自动写工作区，或虚假宣称 child role 能独立强制只读。
 
 ### 凭据边界
 
@@ -140,14 +156,14 @@ https://opencode.ai/zen/go/v1/chat/completions
 2. plaintext handoff 的 collision、原子发布、精确 role、一次消费、replay 拒绝、TTL/损坏恢复、并发 at-most-once 测试通过。
 3. bridge fixtures 证明 Responses input、function tools、tool call delta、tool result continuation、SSE terminal event 和 usage 转换。
 4. bridge `doctor` 证明请求实际映射到 `deepseek-v4-flash`，且 GPT-family 请求 fail closed。
-5. 一次显式授权的小额 live smoke：OpenAI parent 原生 spawn 指定 child，child 收到随机 marker、完成一个只读工具调用并通过 native callback 返回；同时回查 child thread 的 provider/model 元数据。
+5. 一次显式授权的小额 live smoke：OpenAI parent 原生 spawn 指定 child，child 收到随机 marker、完成一个无写入工具调用并通过 native callback 返回；同时回查 child thread 的 provider/model 与实际 permission profile 元数据。
 6. cancel、超时、bridge 重启后的状态丢失均明确失败，不静默换模型、直连 API 或继承 parent 历史。
 
 ## 最终决策
 
 **建新仓库。** 可以把它理解为“Utopia-V control plane + 精简 opencode-bridge transport”，而不是第三个大而全的 agent runtime。
 
-开发顺序建议：先做单模型、read-only、macOS/POSIX 主链并跑 live smoke；再补 Windows；最后才考虑写任务或更多 OpenCode Go 模型。首版不要加入 runtime fallback，失败应明确暴露在 assignment、bridge、provider 或 callback 的具体边界。
+开发顺序建议：先做单模型、behaviorally no-write、macOS/POSIX 主链并跑 live smoke；再补 Windows；最后才考虑写任务或更多 OpenCode Go 模型。首版不要加入 runtime fallback，失败应明确暴露在 assignment、bridge、provider 或 callback 的具体边界。
 
 ## 上游快照
 

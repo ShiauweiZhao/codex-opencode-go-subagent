@@ -1,7 +1,7 @@
 # Codex OpenCode Go Subagent
 
 让 Codex 主任务继续使用原来的 OpenAI 模型和 ChatGPT 登录，只把 OpenCode Go
-套餐中的 `deepseek-v4-flash` 注册为原生、只读的 `v4_flash_worker` 子 Agent。
+套餐中的 `deepseek-v4-flash` 注册为原生、面向只读任务的 `v4_flash_worker` 子 Agent。
 
 OpenCode Go 目前为该模型提供的是
 `https://opencode.ai/zen/go/v1/chat/completions`，而当前 Codex custom provider
@@ -13,7 +13,10 @@ Responses→Chat bridge，并复用经过并发/一次性交付测试的 plainte
 
 - 主 Agent 的顶层 `model`、`model_provider`、`config.toml` 和 ChatGPT 登录不变。
 - child 固定为 `deepseek-v4-flash`，不会 fallback 到其他模型。
-- child 默认 `sandbox_mode = "read-only"`，只接受文本任务。
+- child 只接受文本任务，并由 developer policy 拒绝写入；当前 Codex 会在加载角色后
+  重新应用 parent 的实时 permission profile，因此角色 TOML 不能独立强制降为只读。
+- 若需要操作系统级强制只读，请从 `read-only` parent 任务中 spawn；不要把 child
+  的行为约束误当成 sandbox 证据。
 - 不使用 MCP、OpenCode CLI、第二个 Codex CLI 或完整 `opencode-bridge` runtime。
 - 上游 API key 只由 bridge 进程读取，不进入 agent TOML、Hook 状态或日志。
 - 当前首版支持 macOS/Linux POSIX 主链；bridge 会缓冲一个模型回合后再输出
@@ -90,7 +93,7 @@ launchctl setenv CODEX_OPENCODE_BRIDGE_TOKEN "$CODEX_OPENCODE_BRIDGE_TOKEN"
 4. 明确接受一次很小的 OpenCode Go 调用后，执行
    [prompts/quick-smoke-test.md](prompts/quick-smoke-test.md)。
 
-只有 native child、marker、只读工具调用、callback、provider/model 路由全部可核验，
+只有 native child、marker、无写入工具调用、callback、provider/model 路由全部可核验，
 才能把状态称为 `ready`。本地测试通过但没有 live smoke 时只能称为
 `locally_verified`。
 
@@ -120,6 +123,8 @@ python3 scripts/install.py uninstall
 - 没有自动 daemon/launchd 管理；bridge 由用户显式启动和停止。
 - 没有 Windows PowerShell handoff。
 - 没有图像输入、模型 fallback、写工作区或多模型路由。
+- Codex 当前会让 native child 继承 parent 的运行时权限。仓库能约束任务路由和
+  worker 行为，但不能从 agent TOML 独立收紧 sandbox；这是上游 spawn 配置顺序的限制。
 - OpenCode Go 的模型列表、限额、价格和数据保留会变化，使用前以
   [官方 Go 文档](https://dev.opencode.ai/docs/go/) 为准。
 

@@ -14,7 +14,9 @@ explicitly accepted that call and the localhost bridge is healthy.
    `fork_turns="none"`; do not use direct API, MCP, OpenCode CLI, another Codex
    process, inherited turns, or a fallback provider.
 5. Wait for the native callback and verify the marker, arithmetic, tool evidence,
-   no-write boundary, child agent type, model `deepseek-v4-flash`, provider
-   `opencode_go_bridge`, and unchanged parent provider/model.
+   zero changed files, child agent type, model `deepseek-v4-flash`, provider
+   `opencode_go_bridge`, unchanged parent provider/model, and the child permission
+   profile recorded by Codex. The child profile is expected to inherit the
+   parent profile; do not report it as independently sandboxed read-only.
 6. Report `ready` only if all evidence agrees. Otherwise report the exact failed
    boundary and keep the status `locally_verified` or `failed`.

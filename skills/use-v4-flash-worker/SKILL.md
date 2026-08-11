@@ -11,6 +11,10 @@ description: Use the OpenCode Go backed v4_flash_worker through the installed on
   enumeration, or high-volume reading work.
 - Keep consequential decisions, verification, writes, and final integration in
   the parent. This worker is text-only.
+- Native children currently inherit the parent turn's runtime permission
+  profile after role loading. Treat the worker's no-write rule as a behavioral
+  contract, not an independently enforced sandbox. Use a read-only parent when
+  OS-level write denial is required.
 - Do not send secrets, private source, personal data, or regulated material
   unless the user has authorized the OpenCode Go and DeepSeek data boundary.
 - Do not switch the parent model, provider, or ChatGPT login.
@@ -22,7 +26,8 @@ description: Use the OpenCode Go backed v4_flash_worker through the installed on
 1. Confirm `http://127.0.0.1:4141/healthz` is healthy. Do not call the paid
    upstream merely to test health.
 2. Build one complete assignment containing child identity, objective, scope,
-   exclusions, permissions, evidence/output contract, and stopping condition.
+   exclusions, inherited permission caveat, explicit no-write rule,
+   evidence/output contract, and stopping condition.
 3. Pipe the assignment through stdin to:
 
    ```text

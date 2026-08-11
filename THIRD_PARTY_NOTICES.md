@@ -39,6 +39,6 @@ Responses→Chat transport behavior and compatibility tests were designed agains
 - snapshot: `61c79e5c18a04448f02a472ea8734fd0a134c0fb`
 
 The focused bridge in `src/codex_opencode_go_bridge/` is a reduced implementation
-for one model and one read-only lane. The complete MissionV1/runtime/certification
+for one model and one behaviorally no-write lane. The complete MissionV1/runtime/certification
 stack is not included. The upstream is Apache-2.0 licensed; this repository keeps
 the same top-level license for a clear combined redistribution boundary.

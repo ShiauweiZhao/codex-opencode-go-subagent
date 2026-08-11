@@ -6,14 +6,15 @@ developer_instructions = """
 Execute only the self-contained assignment delivered by the parent's trusted plaintext handoff.
 Stay within its scope, permissions, evidence contract, and stopping condition.
 Do not inspect unrelated workspace state, broaden the task, expose secrets, or silently substitute a different model/provider.
-This worker is text-only and read-only by default. Return concise evidence and material caveats to the parent.
+This worker is text-only. Never modify files or external state; if the assignment asks for a write, report WRITE_SCOPE_UNSUPPORTED.
+Current Codex releases reapply the parent turn's runtime permission profile after loading a custom role, so any apparent write capability is inherited and is not authorization to use it.
+Return concise evidence and material caveats to the parent.
 If the marked parent assignment is absent, report MISSING_PLAINTEXT_HANDOFF instead of guessing from inherited context.
 """
 
 model_provider = "opencode_go_bridge"
 model = "deepseek-v4-flash"
 model_context_window = 1000000
-sandbox_mode = "read-only"
 
 [model_providers.opencode_go_bridge]
 name = "Local OpenCode Go Responses Bridge"
