@@ -19,6 +19,7 @@ AGENT_NAME = "v4_flash_worker"
 HOOK_MATCHER = f"^{AGENT_NAME}$"
 MANIFEST_RELATIVE = Path("opencode-go-subagent") / "install-manifest.json"
 SERVICE_PLACEHOLDER = "__CODEX_OPENCODE_GO_SERVICE__"
+MODEL_CATALOG_PLACEHOLDER = "__CODEX_OPENCODE_GO_MODEL_CATALOG__"
 PYTHON_PLACEHOLDER = "__PYTHON_EXECUTABLE__"
 
 
@@ -52,6 +53,16 @@ def _managed_sources(repo_root: Path) -> list[tuple[Path, Path, int]]:
         (
             repo_root / "agents" / "v4-flash-worker.toml",
             Path("agents") / "v4-flash-worker.toml",
+            0o600,
+        ),
+        (
+            repo_root / "agents" / "gpt-review-worker.toml",
+            Path("agents") / "gpt-review-worker.toml",
+            0o600,
+        ),
+        (
+            repo_root / "agents" / "deepseek-v4-flash-models.json",
+            Path("opencode-go-subagent") / "deepseek-v4-flash-models.json",
             0o600,
         ),
         (
@@ -100,6 +111,9 @@ def _source_data(source: Path, relative: Path, codex_home: Path) -> bytes:
         )
         escaped = str(service_path).replace("\\", "\\\\").replace('"', '\\"')
         data = data.replace(SERVICE_PLACEHOLDER.encode(), escaped.encode())
+        catalog_path = codex_home / "opencode-go-subagent" / "deepseek-v4-flash-models.json"
+        escaped_catalog = str(catalog_path).replace("\\", "\\\\").replace('"', '\\"')
+        data = data.replace(MODEL_CATALOG_PLACEHOLDER.encode(), escaped_catalog.encode())
     if relative in {
         Path("opencode-go-subagent") / "bin" / "codex-opencode-go-bridge",
         Path("opencode-go-subagent") / "bin" / "codex-opencode-go-service",

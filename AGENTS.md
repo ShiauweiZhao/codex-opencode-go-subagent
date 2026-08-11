@@ -1,9 +1,18 @@
 # Repository instructions
 
 - Keep the parent Codex model/provider and ChatGPT login unchanged.
-- Keep `v4_flash_worker` text-only and behaviorally no-write. Do not claim its
-  role TOML independently enforces a read-only sandbox: current Codex reapplies
-  the parent turn's runtime permission profile after role loading.
+- Route only simple, bounded, mechanically verifiable coding, search, extraction,
+  enumeration, and high-volume reading to `v4_flash_worker`. Keep it non-mutating
+  for analysis by default, and require an explicit writable scope plus validation
+  commands for coding. If ambiguity or complexity appears, stop and return the
+  task to the preselected GPT parent.
+- Planning, architecture, consequential judgment, code review, final verification,
+  Git operations, and integration stay with the preselected GPT parent. It may
+  spawn `gpt_review_worker`, which inherits that GPT model and is read-only.
+- Any sandbox or approval-boundary action stays with the GPT parent. The V4 child
+  must stop with `ESCALATE_TO_GPT` instead of requesting escalation.
+- Current Codex reapplies the parent runtime permission profile after role loading;
+  inherited capability never broadens authorization.
 - Maintain one explicit transport path: Codex Responses → localhost bridge →
   OpenCode Go Chat Completions. Do not add silent model or provider fallback.
 - Never read, print, persist in the repository, or place in command arguments

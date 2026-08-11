@@ -155,6 +155,45 @@ class OpenCodeGoClient:
         return parsed
 
 
+def _latest_tool_call_outputs(value: Any) -> list[JSON]:
+    if not isinstance(value, list):
+        return []
+    output_types = {"function_call_output", "custom_tool_call_output"}
+    call_types = {"function_call", "custom_tool_call"}
+    outputs = [
+        item
+        for item in value
+        if isinstance(item, dict) and item.get("type") in output_types
+    ]
+    function_call_indexes = [
+        index
+        for index, item in enumerate(value)
+        if isinstance(item, dict) and item.get("type") in call_types
+    ]
+    if not function_call_indexes:
+        return outputs
+    last_call_index = function_call_indexes[-1]
+    first_call_index = last_call_index
+    while first_call_index > 0:
+        previous_item = value[first_call_index - 1]
+        if not isinstance(previous_item, dict) or previous_item.get("type") not in call_types:
+            break
+        first_call_index -= 1
+    latest_call_ids = {
+        str(item.get("call_id"))
+        for item in value[first_call_index : last_call_index + 1]
+        if isinstance(item, dict) and item.get("call_id")
+    }
+    latest_outputs = [
+        item
+        for item in value[last_call_index + 1 :]
+        if isinstance(item, dict)
+        and item.get("type") in output_types
+        and str(item.get("call_id")) in latest_call_ids
+    ]
+    return latest_outputs
+
+
 def _safe_upstream_message(raw: bytes, secret: str) -> str:
     text = raw.decode("utf-8", errors="replace")[:4096]
     if secret:
@@ -201,15 +240,19 @@ class BridgeService:
             previous_id = body.get("previous_response_id")
             if previous_id:
                 previous = self.store.get(str(previous_id))
+            continuation_items = _latest_tool_call_outputs(body.get("input"))
             if previous is None:
                 call_ids = [
                     str(item.get("call_id"))
-                    for item in body.get("input") or []
-                    if isinstance(item, dict) and item.get("type") == "function_call_output"
-                ] if isinstance(body.get("input"), list) else []
+                    for item in continuation_items
+                    if item.get("call_id")
+                ]
                 if call_ids:
                     previous = self.store.find_by_call_ids(call_ids)
-            payload, context = build_chat_request(body, previous=previous)
+            request_body = body
+            if previous is not None and continuation_items:
+                request_body = {**body, "input": continuation_items}
+            payload, context = build_chat_request(request_body, previous=previous)
             upstream_response = self.upstream.complete(payload)
             response, state = build_responses_result(body, upstream_response, context)
             self.store.put(response["id"], state)
