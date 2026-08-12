@@ -15,9 +15,11 @@ Responses→Chat bridge，并复用经过并发/一次性交付测试的 plainte
 - 主 Agent 的顶层 `model`、`model_provider`、`config.toml` 和 ChatGPT 登录不变，
   安装器也不读取或改写主模型设置。
 - child 固定为 `deepseek-v4-flash`，不会 fallback 到其他模型。
-- V4 只处理简单、可机械验收的编码、检索和整理。规划、架构、复杂或含糊实现、代码
-  review 与最终判断交给主 Agent 当前预选的 GPT；`gpt_review_worker` 只读并继承该模型。
-- V4 分析默认不写入。编码任务必须由 GPT parent 明确给出 writable scope、验证命令
+- V4 只处理简单、可机械验收的编码，以及不需要推理判断的逐项检索、提取和枚举。
+  分析、审计、评估、接入点梳理、测试缺口发现、规划、架构、复杂或含糊实现、代码
+  review 与最终判断都交给主 Agent 当前预选的 GPT；`gpt_review_worker` 只读并继承该模型。
+- 只读不等于适合 V4；凡是要回答“为什么、缺什么、应该怎么接、风险是什么”的任务
+  都属于 GPT。编码任务必须由 GPT parent 明确给出 writable scope、验证命令
   和停止条件；child 不得超出范围，也不得 commit、push 或操作外部系统。任务执行中
   一旦出现复杂度或歧义，必须停止并回交 GPT。
 - 当前 Codex 会在加载角色后重新应用 parent 的实时 permission profile。实际写入必须
@@ -111,6 +113,19 @@ curl -fsS http://127.0.0.1:4141/healthz
 ~/.codex/opencode-go-subagent/bin/codex-opencode-go-service restart
 ~/.codex/opencode-go-subagent/bin/codex-opencode-go-service rotate-local-token
 ```
+
+macOS 上一次性 handoff 通过受管服务暂存，assignment 从 stdin 读取，不进入命令参数：
+
+```bash
+~/.codex/opencode-go-subagent/bin/codex-opencode-go-service stage-handoff < assignment.txt
+```
+
+该命令只访问带本地 bearer 鉴权的 loopback endpoint，禁用代理和重定向，也不调用
+付费上游；实际 handoff 状态由 LaunchAgent 写入，避免 workspace sandbox 直接写
+`~/.codex/opencode-go-subagent/handoff-state`。stage 与 native Hook 都从已安装 Hook
+脚本位置解析同一个绝对目录，不受两个进程各自的 `HOME`/`XDG_STATE_HOME` 影响。
+Hook stage 子进程只继承最小运行环境，不继承上游 key 或本地 bearer。受管 staging
+失败时明确停止，不静默改用直接脚本或其他 provider。
 
 provider 通过受管 service 命令只读取本地 bearer；上游 key 不会返回给 Codex。
 每次 `configure` 也会轮换本地 bearer，避免继承旧的 GUI-wide token。

@@ -23,6 +23,19 @@ LAUNCH_AGENT_LABEL = KEYCHAIN_SERVICE
 UPSTREAM_ACCOUNT = "upstream-api-key"
 BRIDGE_ACCOUNT = "bridge-token"
 _MISSING = object()
+HANDOFF_STAGE_URL = "http://127.0.0.1:4141/internal/handoffs/v4_flash_worker/stage"
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _local_only_opener():
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _NoRedirect(),
+    )
 
 
 def _default_runner(args: list[str], *, input_text: str | None = None) -> subprocess.CompletedProcess:
@@ -202,11 +215,15 @@ def run_bridge(
     keychain,
     environ: MutableMapping[str, str],
     bridge_main: Callable[[], int],
+    *,
+    codex_home: Path | None = None,
 ) -> int:
     updates = {
         "OPENCODE_GO_API_KEY": _required_secret(keychain, UPSTREAM_ACCOUNT),
         "CODEX_OPENCODE_BRIDGE_TOKEN": _required_secret(keychain, BRIDGE_ACCOUNT),
     }
+    if codex_home is not None:
+        updates["CODEX_HOME"] = str(codex_home)
     previous = {name: environ.get(name, _MISSING) for name in updates}
     environ.update(updates)
     try:
@@ -258,6 +275,7 @@ class ManagedBridgeService:
         health_attempts: int = 1,
         health_delay_seconds: float = 0,
         sleeper: Callable[[float], None] = time.sleep,
+        handoff_sender=None,
     ):
         self.codex_home = Path(codex_home)
         self.user_home = Path(user_home)
@@ -269,6 +287,7 @@ class ManagedBridgeService:
         self.health_attempts = max(1, health_attempts)
         self.health_delay_seconds = max(0, health_delay_seconds)
         self.sleeper = sleeper
+        self.handoff_sender = _send_handoff_to_local_bridge if handoff_sender is None else handoff_sender
         self.domain = f"gui/{self.uid}"
         self.plist_path = (
             self.user_home / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
@@ -421,6 +440,71 @@ class ManagedBridgeService:
         report["ok"] = all(report.values())
         return report
 
+    def stage_handoff(self, assignment: str) -> dict[str, object]:
+        if not assignment.strip():
+            raise ValueError("Flash handoff assignment must not be empty")
+        token = _required_secret(self.keychain, BRIDGE_ACCOUNT)
+        result = self.handoff_sender(assignment, token)
+        if (
+            not isinstance(result, dict)
+            or result.get("staged") is not True
+            or result.get("agent_type") != "v4_flash_worker"
+        ):
+            raise RuntimeError("managed handoff staging returned an invalid result")
+        return result
+
+
+def _safe_local_error(raw: bytes) -> str:
+    try:
+        payload = json.loads(raw.decode("utf-8", errors="replace")[:4096])
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(payload, dict) or not isinstance(payload.get("error"), dict):
+        return ""
+    return str(payload["error"].get("message") or "")[:1000]
+
+
+def _send_handoff_to_local_bridge(assignment: str, token: str) -> dict[str, object]:
+    payload = json.dumps(
+        {"assignment": assignment},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        HANDOFF_STAGE_URL,
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with _local_only_opener().open(request, timeout=10) as response:
+            raw = response.read(64 * 1024 + 1)
+    except urllib.error.HTTPError as error:
+        try:
+            raw = error.read(64 * 1024)
+        finally:
+            error.close()
+        message = _safe_local_error(raw) or f"local handoff service returned HTTP {error.code}"
+        for sensitive_value in (assignment, token):
+            if sensitive_value:
+                message = message.replace(sensitive_value, "[REDACTED]")
+        raise RuntimeError(f"managed handoff staging failed: {message}") from None
+    except (OSError, urllib.error.URLError):
+        raise RuntimeError("managed handoff staging service is unavailable") from None
+    if len(raw) > 64 * 1024:
+        raise RuntimeError("managed handoff staging response exceeded size limit")
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError:
+        raise RuntimeError("managed handoff staging returned invalid JSON") from None
+    if not isinstance(result, dict):
+        raise RuntimeError("managed handoff staging returned a non-object response")
+    return result
+
 
 def _localhost_health() -> bool:
     try:
@@ -453,7 +537,9 @@ def main(
     *,
     service_factory=None,
     secret_reader=getpass.getpass,
+    input_stream=None,
     output=None,
+    error_output=None,
 ) -> int:
     parser = argparse.ArgumentParser(description="Manage the OpenCode Go bridge service")
     parser.add_argument(
@@ -469,6 +555,7 @@ def main(
             "doctor",
             "uninstall",
             "print-bridge-token",
+            "stage-handoff",
             "run",
         ),
     )
@@ -476,13 +563,32 @@ def main(
     args = parser.parse_args(argv)
     service = (default_service if service_factory is None else service_factory)()
     destination = sys.stdout if output is None else output
+    error_destination = sys.stderr if error_output is None else error_output
     if args.action == "print-bridge-token":
         print_bridge_token(service.keychain, destination)
         return 0
     if args.action == "run":
         from .server import main as bridge_main
 
-        return run_bridge(service.keychain, os.environ, bridge_main)
+        return run_bridge(
+            service.keychain,
+            os.environ,
+            bridge_main,
+            codex_home=service.codex_home,
+        )
+    if args.action == "stage-handoff":
+        source = sys.stdin if input_stream is None else input_stream
+        assignment = source.read()
+        try:
+            report = service.stage_handoff(assignment)
+        except (RuntimeError, ValueError) as error:
+            message = str(error)
+            if assignment:
+                message = message.replace(assignment, "[REDACTED]")
+            print(f"stage-handoff failed: {message}", file=error_destination)
+            return 12
+        print(json.dumps(report, ensure_ascii=False, indent=2), file=destination)
+        return 0
     if args.action == "configure":
         report = service.configure(secret_reader("OpenCode Go API key: "))
     elif args.action == "uninstall":

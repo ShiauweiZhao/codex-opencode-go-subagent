@@ -20,7 +20,9 @@ an isolated worktree or starts from a more restrictive permission profile.
 
 ## Assignment contract
 
-Every staged assignment identifies its mode as analysis or coding. A coding
+Every staged assignment identifies its mode as extraction or coding. Analysis,
+audit, assessment, design, integration mapping, and test-gap discovery stay on
+the preselected GPT parent. A coding
 assignment must provide:
 
 - the concrete objective and repository or directory in scope;
@@ -48,8 +50,8 @@ and performing all Git and pull-request operations. It may spawn the read-only
 
 The agent description and developer instructions will describe simple bounded
 coding and mechanical support work rather than a fixed text-only no-write worker.
-The installed skill and managed `AGENTS.md` block will keep planning, complex
-work, review, and final verification on GPT, while requiring the V4 writable-scope
+The installed skill and managed `AGENTS.md` block will keep all analysis,
+planning, complex work, review, and final verification on GPT, while requiring the V4 writable-scope
 and validation contract. Documentation will continue to distinguish inherited
 runtime permissions from policy authorization.
 

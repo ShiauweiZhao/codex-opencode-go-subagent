@@ -25,9 +25,10 @@ permission profile 写回 child。因此 agent TOML 中的 `sandbox_mode = "read
 [`multi_agents/spawn.rs`](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents/spawn.rs)
 与
 [`multi_agents_common.rs`](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents_common.rs)。
-本仓库因此移除该误导字段。V4 worker 只处理简单、可机械验收的任务，对分析默认不写；
-编码只有在 GPT parent 明确提供 writable scope 和验证命令时才能写入。规划、复杂
-实现、代码 review 和最终验证留在预选 GPT；
+本仓库因此移除该误导字段。V4 worker 只处理简单、可机械验收的编码，以及无需推理
+判断的字面查找、提取或枚举；分析、审计、评估、接入点梳理和测试缺口发现不交给
+V4。编码只有在 GPT parent 明确提供 writable scope 和验证命令时才能写入。规划、
+复杂实现、代码 review 和最终验证留在预选 GPT；
 需要操作系统级写拒绝时，必须从 read-only parent 任务中 spawn。
 
 ### Codex 0.147 兼容更新：bridge 结构化写入工具
@@ -109,9 +110,10 @@ OpenCode Go 使用 Chat Completions**。多出的本地进程换来了明确、�
 
 ```text
 Codex 主 Agent（预选 GPT / 原 OpenAI provider / ChatGPT 登录）
-  planning / architecture / complex implementation / final validation
+  analysis / audit / planning / architecture / complex implementation / final validation
   |
-  | stage 一次性明文 assignment
+  | macOS: managed localhost stage-handoff
+  | Linux: direct Hook stage
   | spawn_agent(agent_type="v4_flash_worker", fork_turns="none")
   v
 SubagentStart plaintext Hook（Utopia-V 模式）
@@ -148,13 +150,13 @@ V4 child 产出限定范围 diff
   原生自定义工具，不承载 GPT 审批或 review）
 - `skills/use-v4-flash-worker/`
 - `hooks/plaintext_handoff.py` 及其 POSIX 协议测试
-- `bridge/`：Responses↔Chat 的纯协议适配、SSE、tool calls、tool-result continuation、短期 state、`/health`
+- `bridge/`：Responses↔Chat 的纯协议适配、SSE、tool calls、tool-result continuation、短期 state、`/health`，以及 macOS 受管 handoff staging endpoint
 - `scripts/install.py`：幂等安装、备份/回滚、Hook 合并、静态检查
 - `scripts/service.py`：`up/down/status/doctor`；仅绑定 `127.0.0.1`
 - `tests/`：handoff 协议、转换 fixtures、SSE、工具续轮、安装等价性
 - `prompts/quick-smoke-test.md`：一次最小付费 native child 测试
 
-明确不做：修改顶层 `model` / `model_provider`、自定义全局 model catalog、关闭整个 session 的 V2、fallback 到其他模型、通过 bridge 转发 GPT、MCP、另一个 Codex CLI、MissionV1、把复杂工作交给 V4、无 assignment 授权的写入、自动 worktree、宣称 model catalog 启用原生自定义工具，或虚假宣称 child role 能独立强制权限边界。
+明确不做：修改顶层 `model` / `model_provider`、自定义全局 model catalog、关闭整个 session 的 V2、fallback 到其他模型、通过 bridge 转发 GPT、MCP、另一个 Codex CLI、MissionV1、把分析/审计/复杂工作交给 V4、无 assignment 授权的写入、自动 worktree、宣称 model catalog 启用原生自定义工具，或虚假宣称 child role 能独立强制权限边界。
 
 ### 凭据边界
 
@@ -182,6 +184,7 @@ V4 child 产出限定范围 diff
 
 1. 静态证明 parent 的顶层 model/provider/auth 文件未被改动。
 2. plaintext handoff 的 collision、原子发布、精确 role、一次消费、replay 拒绝、TTL/损坏恢复、并发 at-most-once 测试通过。
+   macOS 受管 staging 还必须证明 workspace sandbox 不直接写 state 目录、loopback endpoint 不调用上游、失败后不 spawn 或 fallback。
 3. bridge fixtures 证明 Responses input、function tools、tool call delta、tool result continuation、SSE terminal event 和 usage 转换。
 4. bridge `doctor` 证明请求实际映射到 `deepseek-v4-flash`，且 GPT-family 请求 fail closed。
 5. 显式授权的小额 live smoke：预选 GPT parent 原生 spawn 指定 V4 child，先完成只读路由检查，再在临时 Git 仓库内只修改一个授权文件、运行测试并通过 native callback 返回；GPT reviewer 按 marker 关联 parent-visible child rollout JSONL（`$CODEX_HOME/sessions`）与 bridge SQLite response chain（`$CODEX_HOME/opencode-go-subagent/state.sqlite3`），核验 child 实际 tool-call 证据（bridge 端 `tool_types.apply_patch` 必须为 `safe_exec_apply_patch`，映射后的 `exec_command` 必须为规范 shell 引号且解析 argv 恰好为 `[apply_patch, 原始patch]`；拒绝 callback 文本、手工 `exec_command` 写命令、heredoc、重定向、脚本写文件与审批请求）与精确 diff，同时回查 V4 provider/model、GPT reviewer provider/model 与实际 permission profile 元数据。

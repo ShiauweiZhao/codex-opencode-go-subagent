@@ -12,8 +12,26 @@ from codex_opencode_go_bridge.state import SQLiteStateStore
 
 
 class FakeUpstream:
+    def __init__(self):
+        self.requests = []
+
     def complete(self, payload):
+        self.requests.append(payload)
         return {"choices": [{"message": {"content": "from fake upstream"}}]}
+
+
+class FakeHandoffStager:
+    def __init__(self):
+        self.assignments = []
+
+    def stage(self, assignment):
+        self.assignments.append(assignment)
+        return {
+            "staged": True,
+            "handoff_id": "12345678-1234-5678-1234-567812345678",
+            "agent_type": "v4_flash_worker",
+            "expires_at": "2026-08-12T02:00:00+00:00",
+        }
 
 
 class HTTPServerTests(unittest.TestCase):
@@ -25,10 +43,13 @@ class HTTPServerTests(unittest.TestCase):
             host="127.0.0.1",
             port=0,
         )
+        self.upstream = FakeUpstream()
+        self.stager = FakeHandoffStager()
         service = BridgeService(
             config,
             SQLiteStateStore(Path(self.tmp.name) / "state.sqlite3"),
-            FakeUpstream(),
+            self.upstream,
+            handoff_stager=self.stager,
         )
         self.server = make_server(config, service)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -75,6 +96,35 @@ class HTTPServerTests(unittest.TestCase):
             content_type = response.headers.get_content_type()
         self.assertEqual(content_type, "text/event-stream")
         self.assertIn(b"from fake upstream", data)
+
+    def test_managed_handoff_stage_requires_bearer_and_never_calls_upstream(self):
+        assignment = "bounded coding assignment\nmarker=managed-stage"
+        payload = json.dumps({"assignment": assignment}).encode()
+        unauthorized = urllib.request.Request(
+            f"{self.base}/internal/handoffs/v4_flash_worker/stage",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(unauthorized, timeout=2)
+        self.assertEqual(caught.exception.code, 401)
+        caught.exception.close()
+
+        authorized = urllib.request.Request(
+            f"{self.base}/internal/handoffs/v4_flash_worker/stage",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer local-secret",
+            },
+        )
+        with urllib.request.urlopen(authorized, timeout=2) as response:
+            result = json.loads(response.read())
+
+        self.assertTrue(result["staged"])
+        self.assertEqual(result["agent_type"], "v4_flash_worker")
+        self.assertEqual(self.stager.assignments, [assignment])
+        self.assertEqual(self.upstream.requests, [])
 
 
 if __name__ == "__main__":

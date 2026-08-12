@@ -7,15 +7,19 @@ description: Use the OpenCode Go backed v4_flash_worker through the installed on
 
 ## Choose the worker
 
-- Use it only for simple, bounded, mechanically verifiable coding, repository
-  lookup, text, code, log, search, extraction, enumeration, or high-volume
-  reading work.
-- Keep planning, architecture, ambiguous or cross-cutting implementation,
+- Use it only for simple, bounded, mechanically verifiable coding or pure
+  extraction, literal lookup, and enumeration with no inference or judgment.
+- Keep analysis, audit, assessment, design, planning, architecture, integration-
+  point mapping, test-gap discovery, ambiguous or cross-cutting implementation,
   consequential judgment, code review, and final validation on the preselected
   GPT parent. The parent may spawn `gpt_review_worker`, which inherits that GPT
   model and stays read-only.
-- Analysis and review are non-mutating by default. Assign coding only with an
-  explicit writable scope and concrete validation commands.
+- Never send an analysis or audit assignment to V4. A read-only task is not
+  automatically simple: if it asks what should change, why, what is missing, or
+  what risks exist, it belongs to GPT.
+- Assign coding only with an explicit writable scope and concrete validation
+  commands. Cross-module wiring belongs to GPT until GPT has reduced it to one
+  mechanical implementation job with resolved interfaces and an objective oracle.
 - Keep consequential decisions, final diff review, independent verification,
   Git operations, and integration in the parent.
 - Native children currently inherit the parent turn's runtime permission
@@ -32,18 +36,23 @@ description: Use the OpenCode Go backed v4_flash_worker through the installed on
 1. Confirm `http://127.0.0.1:4141/healthz` is healthy. On macOS, use the
    installed `codex-opencode-go-service doctor` if it is not. Do not call the
    paid upstream merely to test health or start a separate foreground bridge.
-2. Build one complete assignment containing child identity, task mode
-   (`analysis` or `coding`), objective, scope, exclusions, inherited permission
+2. Build one complete assignment containing child identity, task mode (`coding` or `extraction`), objective, scope, exclusions, inherited permission
    caveat, evidence/output contract, and stopping condition. A coding assignment
    must also name its explicit writable scope and validation commands. Never
    imply that the worker may modify the whole repository by default.
-3. Pipe the assignment through stdin to:
+3. On macOS managed installations, pipe the assignment through stdin to:
 
    ```text
-   python3 "$CODEX_HOME/hooks/codex-opencode-go-subagent/plaintext_handoff.py" --mode stage
+   "$CODEX_HOME/opencode-go-subagent/bin/codex-opencode-go-service" stage-handoff
    ```
 
-   If `CODEX_HOME` is unset, use `~/.codex`. Never spawn after a failed stage.
+   If `CODEX_HOME` is unset, use `~/.codex`. This sends the assignment only to
+   the authenticated localhost managed service; the LaunchAgent performs the
+   state transition, so the parent task does not write the handoff state
+   directory. On Linux manual installations, use the installed
+   `plaintext_handoff.py --mode stage` path directly. Never spawn after a failed
+   stage. Do not fall back to direct filesystem staging when managed staging
+   fails; report the exact service boundary instead.
 4. Immediately call native `spawn_agent` with exact agent type
    `v4_flash_worker`, a unique task name, and `fork_turns="none"`. The spawn
    message should only identify the trusted one-shot Hook.
@@ -81,6 +90,9 @@ description: Use the OpenCode Go backed v4_flash_worker through the installed on
   model/provider.
 - A coding assignment without a writable scope or validation commands is
   incomplete. Report the missing contract instead of guessing or writing.
+- An assignment labeled analysis, audit, assessment, design, planning,
+  integration mapping, or test-gap discovery is not a V4 job even when it is
+  read-only. Keep it on the preselected GPT parent.
 - If a simple assignment reveals ambiguity, broad impact, architectural choices,
   or security-sensitive judgment, stop with `ESCALATE_TO_GPT`; do not expand the
   assignment or continue coding.
