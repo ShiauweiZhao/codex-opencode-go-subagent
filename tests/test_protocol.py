@@ -1,5 +1,10 @@
 import json
+import os
+import shlex
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 
 from codex_opencode_go_bridge.protocol import (
@@ -86,6 +91,163 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(tool["name"], "apply_patch")
         self.assertEqual(tool["parameters"]["required"], ["patch"])
         self.assertEqual(context.tool_types, {"apply_patch": "custom"})
+
+    def test_build_chat_request_adds_structured_apply_patch_for_exec_command(self):
+        payload, context = build_chat_request(
+            {
+                "model": "deepseek-v4-flash",
+                "input": "Implement the bounded change.",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "exec_command",
+                        "description": "Run a shell command.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "cmd": {"type": "string"},
+                                "workdir": {"type": "string"},
+                            },
+                            "required": ["cmd"],
+                        },
+                    }
+                ],
+            }
+        )
+
+        tools = {item["function"]["name"]: item["function"] for item in payload["tools"]}
+        self.assertEqual(set(tools), {"exec_command", "apply_patch"})
+        self.assertEqual(tools["apply_patch"]["parameters"]["required"], ["patch", "workdir"])
+        self.assertEqual(context.reverse_tool_names["apply_patch"], "exec_command")
+        self.assertEqual(context.tool_types["apply_patch"], "safe_exec_apply_patch")
+
+    def test_build_responses_result_safely_quotes_structured_apply_patch(self):
+        body = {
+            "model": "deepseek-v4-flash",
+            "input": "Implement the bounded change.",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "exec_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"cmd": {"type": "string"}},
+                        "required": ["cmd"],
+                    },
+                }
+            ],
+        }
+        _, context = build_chat_request(body)
+        patch = (
+            "*** Begin Patch\n"
+            "*** Add File: quoted.txt\n"
+            "+single ' double \" dollar $(touch SENTINEL) backtick `touch SENTINEL` ; & |\n"
+            "*** End Patch"
+        )
+
+        result, state = build_responses_result(
+            body,
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_safe_patch",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "apply_patch",
+                                        "arguments": json.dumps(
+                                            {"patch": patch, "workdir": "/tmp/authorized repo"}
+                                        ),
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+            context,
+            response_id="resp_safe_patch",
+            created_at=123,
+        )
+
+        call = result["output"][0]
+        arguments = json.loads(call["arguments"])
+        self.assertEqual(call["type"], "function_call")
+        self.assertEqual(call["name"], "exec_command")
+        self.assertEqual(arguments["workdir"], "/tmp/authorized repo")
+        self.assertEqual(arguments["cmd"], f"apply_patch {shlex.quote(patch)}")
+        self.assertEqual(shlex.split(arguments["cmd"]), ["apply_patch", patch])
+        self.assertEqual(state["tool_types"]["apply_patch"], "safe_exec_apply_patch")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            capture = root / "captured-patch"
+            sentinel = root / "SENTINEL"
+            shim = root / "apply_patch"
+            shim.write_text('#!/bin/sh\nprintf %s "$1" > "$CAPTURE_FILE"\n')
+            shim.chmod(0o700)
+            environment = dict(os.environ)
+            environment["PATH"] = f"{root}{os.pathsep}{environment.get('PATH', '')}"
+            environment["CAPTURE_FILE"] = str(capture)
+
+            subprocess.run(
+                ["/bin/sh", "-c", arguments["cmd"]],
+                cwd=root,
+                env=environment,
+                check=True,
+            )
+
+            self.assertEqual(capture.read_text(), patch)
+            self.assertFalse(sentinel.exists())
+
+    def test_build_responses_result_rejects_invalid_safe_patch_arguments(self):
+        body = {
+            "model": "deepseek-v4-flash",
+            "input": "Implement the bounded change.",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "exec_command",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        }
+        _, context = build_chat_request(body)
+
+        invalid_arguments = (
+            "not-json",
+            json.dumps({"patch": "missing markers", "workdir": "/tmp/repo"}),
+            json.dumps({"patch": "*** Begin Patch\n*** End Patch", "workdir": ""}),
+            json.dumps({"patch": "*** Begin Patch\n\x00*** End Patch", "workdir": "/tmp/repo"}),
+        )
+        for arguments in invalid_arguments:
+            with self.subTest(arguments=arguments), self.assertRaises(ProtocolError):
+                build_responses_result(
+                    body,
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": "",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_invalid_patch",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "apply_patch",
+                                                "arguments": arguments,
+                                            },
+                                        }
+                                    ],
+                                }
+                            }
+                        ]
+                    },
+                    context,
+                )
 
     def test_build_chat_request_drops_unknown_custom_tools(self):
         payload, _ = build_chat_request(

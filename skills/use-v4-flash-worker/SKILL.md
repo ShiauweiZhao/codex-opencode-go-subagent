@@ -54,6 +54,24 @@ description: Use the OpenCode Go backed v4_flash_worker through the installed on
    pull request, or mutate external systems. The parent decides whether to keep
    and integrate the changes.
 
+## Audit the coding oracle
+
+- The GPT parent must audit parent-visible child rollout JSONL selected by the
+  marker and `v4_flash_worker` session metadata, plus the bridge SQLite response
+  chain selected by the same marker. Callback text is not authoritative.
+- Rollout JSONL is under `$CODEX_HOME/sessions` (or `~/.codex/sessions`);
+  bridge state is `$CODEX_HOME/opencode-go-subagent/state.sqlite3`. Never print
+  unrelated prompt/state content or secrets.
+- Require bridge `tool_types.apply_patch` equal to `safe_exec_apply_patch` and
+  upstream structured apply_patch evidence with `{patch, workdir}`.
+- Require the mapped `exec_command` to be canonical shell quoting whose parsed
+  argv is exactly `[apply_patch, original_patch]`. Reject direct
+  model-generated `exec_command` writes, heredocs, redirection, script writes,
+  and approval requests.
+- Fact scope: the Codex 0.147 feature list marks `apply_patch_freeform` as
+  removed and the observed 0.147 V4 custom-child request did not expose a custom
+  apply_patch tool. Do not generalize to other children or future versions.
+
 ## Fail safely
 
 - Handoff is one-shot and at-most-once. Resolve stale or quarantined state
@@ -66,6 +84,10 @@ description: Use the OpenCode Go backed v4_flash_worker through the installed on
 - If a simple assignment reveals ambiguity, broad impact, architectural choices,
   or security-sensitive judgment, stop with `ESCALATE_TO_GPT`; do not expand the
   assignment or continue coding.
+- Reject coding evidence that relies only on callback claims: writes must be
+  verifiable from the rollout JSONL and the bridge SQLite response chain through
+  the structured `apply_patch` tool, never from model-constructed `exec_command`
+  writes, heredocs, redirection, or script writes.
 - If an action would cross the active sandbox or approval boundary, stop with
   `ESCALATE_TO_GPT`. Auto-review is an approval reviewer, not this project's GPT
   code-review route; never send its model request through the V4 bridge.

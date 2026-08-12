@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import time
 import uuid
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from typing import Any, Callable, Iterable
 
 JSON = dict[str, Any]
 SUPPORTED_MODEL = "deepseek-v4-flash"
+_SAFE_EXEC_APPLY_PATCH = "safe_exec_apply_patch"
 _VALID_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _DROP_TOOL_TYPES = {
     "computer_use_preview",
@@ -142,7 +144,71 @@ def _convert_tools(tools: Any) -> tuple[list[JSON], dict[str, str], dict[str, st
         function.setdefault("description", "")
         function.setdefault("parameters", {"type": "object", "properties": {}})
         converted.append({"type": "function", "function": function})
+    has_exec_command = any(original == "exec_command" for original in reverse.values())
+    has_apply_patch = any(original == "apply_patch" for original in reverse.values())
+    if has_exec_command and not has_apply_patch:
+        safe = _sanitize_tool_name("apply_patch", used)
+        reverse[safe] = "exec_command"
+        tool_types[safe] = _SAFE_EXEC_APPLY_PATCH
+        converted.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": safe,
+                    "description": (
+                        "Apply a patch inside the explicitly authorized writable scope. "
+                        "Use this structured tool for every file modification instead of "
+                        "constructing an exec_command write command."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "patch": {
+                                "type": "string",
+                                "description": (
+                                    "The complete apply_patch payload, including Begin Patch "
+                                    "and End Patch markers."
+                                ),
+                            },
+                            "workdir": {
+                                "type": "string",
+                                "description": "The authorized repository working directory.",
+                            },
+                        },
+                        "required": ["patch", "workdir"],
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        )
     return converted, reverse, tool_types
+
+
+def _safe_exec_apply_patch_arguments(arguments: str) -> str:
+    try:
+        decoded = json.loads(arguments)
+    except json.JSONDecodeError as error:
+        raise ProtocolError("safe apply_patch arguments must be valid JSON") from error
+    if not isinstance(decoded, dict):
+        raise ProtocolError("safe apply_patch arguments must be an object")
+    patch = decoded.get("patch")
+    workdir = decoded.get("workdir")
+    if not isinstance(patch, str) or "\x00" in patch:
+        raise ProtocolError("safe apply_patch requires a NUL-free string patch")
+    if not patch.startswith("*** Begin Patch\n") or not patch.rstrip("\n").endswith(
+        "*** End Patch"
+    ):
+        raise ProtocolError("safe apply_patch payload is missing patch boundary markers")
+    if not isinstance(workdir, str) or not workdir:
+        raise ProtocolError("safe apply_patch requires a non-empty string workdir")
+    return json.dumps(
+        {
+            "cmd": f"apply_patch {shlex.quote(patch)}",
+            "workdir": workdir,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def _request_items(value: Any) -> tuple[list[JSON], list[JSON]]:
@@ -283,7 +349,8 @@ def build_responses_result(
             }
         )
         pending.append(call_id)
-        if context.tool_types.get(raw_name) == "custom":
+        tool_type = context.tool_types.get(raw_name)
+        if tool_type == "custom":
             try:
                 custom_arguments = json.loads(arguments)
             except json.JSONDecodeError as error:
@@ -298,6 +365,17 @@ def build_responses_result(
                     "call_id": call_id,
                     "name": original_name,
                     "input": patch,
+                    "status": "completed",
+                }
+            )
+        elif tool_type == _SAFE_EXEC_APPLY_PATCH:
+            output.append(
+                {
+                    "type": "function_call",
+                    "id": _new_id("fc"),
+                    "call_id": call_id,
+                    "name": original_name,
+                    "arguments": _safe_exec_apply_patch_arguments(arguments),
                     "status": "completed",
                 }
             )
