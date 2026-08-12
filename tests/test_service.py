@@ -1,5 +1,7 @@
 import json
 import shlex
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +11,8 @@ from codex_opencode_go_bridge.server import (
     BridgeConfig,
     BridgeService,
     ConfigError,
+    HandoffStageError,
+    SubprocessHandoffStager,
     UpstreamError,
 )
 from codex_opencode_go_bridge.state import SQLiteStateStore
@@ -76,6 +80,93 @@ class BridgeConfigTests(unittest.TestCase):
                 local_token="local",
                 upstream_base="http://example.com/v1",
             )
+
+
+class SubprocessHandoffStagerTests(unittest.TestCase):
+    def test_passes_assignment_only_through_stdin_and_returns_sanitized_metadata(self):
+        calls = []
+        assignment = "bounded coding assignment\nmarker=managed-stage"
+
+        def runner(args, **kwargs):
+            calls.append((args, kwargs))
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                json.dumps(
+                    {
+                        "staged": True,
+                        "handoff_id": "12345678-1234-5678-1234-567812345678",
+                        "agent_type": "v4_flash_worker",
+                        "expires_at": "2026-08-12T02:00:00+00:00",
+                        "pending_path": "/private/state/pending.json",
+                    }
+                ),
+                "",
+            )
+
+        stager = SubprocessHandoffStager(
+            Path("/installed/plaintext_handoff.py"),
+            runner=runner,
+            environ={
+                "PATH": "/usr/bin:/bin",
+                "XDG_STATE_HOME": "/must/not/be/inherited",
+                "CODEX_DEEPSEEK_HANDOFF_DIR": "/must/not/be/inherited",
+                "OPENCODE_GO_API_KEY": "upstream-secret",
+                "CODEX_OPENCODE_BRIDGE_TOKEN": "local-secret",
+            },
+        )
+
+        report = stager.stage(assignment)
+
+        args, kwargs = calls[0]
+        self.assertEqual(
+            args,
+            [
+                sys.executable,
+                "/installed/plaintext_handoff.py",
+                "--mode",
+                "stage",
+            ],
+        )
+        self.assertEqual(kwargs["input"], assignment)
+        self.assertTrue(kwargs["text"])
+        self.assertTrue(kwargs["capture_output"])
+        self.assertFalse(kwargs["check"])
+        self.assertEqual(
+            kwargs["env"],
+            {"PATH": "/usr/bin:/bin"},
+        )
+        self.assertNotIn("pending_path", report)
+        self.assertNotIn(assignment, json.dumps(report))
+
+    def test_failure_never_echoes_the_assignment(self):
+        assignment = "do not echo this bounded assignment"
+
+        def runner(args, **kwargs):
+            return subprocess.CompletedProcess(
+                args,
+                12,
+                "",
+                f"could not stage {assignment} with upstream-secret or local-secret",
+            )
+
+        stager = SubprocessHandoffStager(
+            Path("/installed/plaintext_handoff.py"),
+            runner=runner,
+            environ={
+                "OPENCODE_GO_API_KEY": "upstream-secret",
+                "CODEX_OPENCODE_BRIDGE_TOKEN": "local-secret",
+            },
+            redactions=("upstream-secret", "local-secret"),
+        )
+
+        with self.assertRaises(HandoffStageError) as caught:
+            stager.stage(assignment)
+
+        self.assertNotIn(assignment, str(caught.exception))
+        self.assertNotIn("upstream-secret", str(caught.exception))
+        self.assertNotIn("local-secret", str(caught.exception))
+        self.assertIn("[REDACTED]", str(caught.exception))
 
 
 class BridgeServiceTests(unittest.TestCase):

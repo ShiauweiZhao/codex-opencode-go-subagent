@@ -18,7 +18,7 @@ fallback is introduced.
 ## Components and data flow
 
 `codex-opencode-go-service` owns `configure`, `install`, `start`, `stop`,
-`restart`, `status`, `doctor`, `run`, and `print-bridge-token` actions.
+`restart`, `status`, `doctor`, `run`, `stage-handoff`, and `print-bridge-token` actions.
 `configure` reads the OpenCode Go key with a hidden prompt, generates a distinct
 local bearer token, stores both as generic-password items in the user's macOS
 Keychain, writes a secret-free LaunchAgent plist, bootstraps it, and waits for
@@ -35,6 +35,19 @@ renders the absolute installed service-launcher path into the managed agent TOML
 Codex executes `print-bridge-token`, caches the returned local token, and sends
 it only to `127.0.0.1:4141`. The upstream key is never returned to Codex.
 
+`stage-handoff` reads one assignment from stdin and posts it to a fixed,
+bearer-authenticated loopback endpoint. The already-running LaunchAgent invokes
+the installed Hook in stage mode and performs the state-directory write outside
+the parent workspace sandbox. The client disables environment proxies and HTTP
+redirects. The Hook subprocess receives only an allowlisted state/runtime
+environment, not the upstream API key or local bearer. Both stage and native
+Hook consumption derive one state directory from the installed Hook script path,
+so differing `HOME`, `XDG_STATE_HOME`, or legacy override variables cannot split
+the one-shot slot. The endpoint never contacts OpenCode Go, never accepts a
+different agent type, and never returns the assignment. A failed managed stage
+is terminal for that spawn attempt; the skill does not silently retry with direct
+filesystem staging or another provider.
+
 ## Lifecycle and failure behavior
 
 The plist uses `RunAtLoad` and restart-on-unsuccessful-exit. Service operations
@@ -46,6 +59,10 @@ Configuration fails before changing launchd state if Keychain writes fail.
 Service start fails visibly when credentials are missing, the plist is invalid,
 port 4141 is occupied, or health never becomes ready. The bridge remains bound
 to loopback and keeps its independent bearer check.
+
+Managed handoff staging fails visibly when the local bearer is invalid, the
+installed Hook is unavailable, the one-shot slot is occupied or quarantined, or
+the atomic state transition fails. The parent must not spawn after that failure.
 
 Normal uninstall unloads the LaunchAgent and removes only manifest-managed
 files and the managed plist. It preserves Keychain items and reports them as

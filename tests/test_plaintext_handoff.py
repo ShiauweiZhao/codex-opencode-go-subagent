@@ -1,5 +1,6 @@
 import datetime
 from concurrent.futures import ThreadPoolExecutor
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 
 def resolve_script():
@@ -38,6 +40,18 @@ def resolve_script():
 
 SCRIPT = resolve_script()
 AGENT_TYPE = "v4_flash_worker"
+
+
+def load_handoff_module():
+    spec = importlib.util.spec_from_file_location("plaintext_handoff_under_test", SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load plaintext handoff module: {SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+HANDOFF_MODULE = load_handoff_module()
 
 
 def utc_timestamp(*, seconds_from_now=0):
@@ -110,6 +124,21 @@ class PlaintextHandoffCliTests(unittest.TestCase):
         return sorted(self.state_directory.glob(f"{AGENT_TYPE}.*.json"))
 
     # Baseline contract: these tests capture the behavior relied upon by the skill.
+
+    def test_default_state_root_is_script_local_and_ignores_process_environment(self):
+        expected = SCRIPT.resolve().parent.parent / "opencode-go-subagent" / "handoff-state"
+        with patch.dict(
+            os.environ,
+            {
+                "HOME": "/different/home",
+                "XDG_STATE_HOME": "/different/xdg-state",
+                "CODEX_DEEPSEEK_HANDOFF_DIR": "/different/handoff-state",
+            },
+            clear=False,
+        ):
+            actual = HANDOFF_MODULE.state_root(None)
+
+        self.assertEqual(actual, expected)
 
     def test_stage_creates_private_pending_envelope_without_echoing_assignment(self):
         assignment = "Inspect only the bounded fixture.\n"

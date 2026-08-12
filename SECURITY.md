@@ -26,13 +26,20 @@ Responses tool continuation state 默认保存在：
 确认不再需要后可由用户显式删除。
 
 plaintext Hook 的 pending assignment 也会短暂保存在当前用户 state 目录中，并在一次
-成功交付后消费。它解决跨 provider 任务正文交付问题，不是机密通道。
+成功交付后消费。macOS 受管模式通过带本地 bearer 鉴权的 loopback endpoint 把 stdin
+assignment 交给 LaunchAgent，由服务进程执行同一原子 stage 协议，父任务无需直接写
+state 目录。client 禁用系统代理与 HTTP 重定向；endpoint 不调用 OpenCode Go 上游，
+也不回显 assignment。Hook stage 子进程使用 allowlist 环境，不继承上游 API key 或
+本地 bearer；已知敏感值也会从失败消息中脱敏。stage 与 native Hook 从已安装脚本
+位置解析同一个 `~/.codex/opencode-go-subagent/handoff-state`，不会因两个进程的
+`HOME`/`XDG_STATE_HOME` 不同而分叉。它解决跨 provider 任务正文交付问题，不是机密通道。
 
 ## Workspace mutation
 
-- V4 只接受简单、边界清晰、可机械验收的工作；规划、复杂实现、代码 review 和最终
-  判断由用户预选的 GPT 负责。发现歧义或复杂度时 V4 必须停止并回交。
-- V4 分析 assignment 默认不授权写入；`gpt_review_worker` 始终只读。
+- V4 只接受简单、边界清晰、可机械验收的实现或纯提取/枚举；分析、审计、评估、
+  接入点梳理、测试缺口发现、规划、复杂实现、代码 review 和最终判断由用户预选的
+  GPT 负责。只读任务也不能据此自动交给 V4；发现推理判断、歧义或复杂度时必须回交。
+- `gpt_review_worker` 始终只读并继承用户预选的 GPT 模型。
 - 编码 assignment 必须列出 explicit writable scope 和 validation commands。
 - child 继承 parent 的 runtime permission profile；技术上可写不代表任务已授权。
 - child 不得 commit、push、创建 PR、修改凭据或操作外部系统；parent 独立检查 diff、
@@ -48,7 +55,9 @@ plaintext Hook 的 pending assignment 也会短暂保存在当前用户 state �
   `gpt_review_worker` 完成。
 - bridge 仍只接受 `deepseek-v4-flash`，不提供 GPT 或 `codex-auto-review` passthrough。
 - 不存在运行时 fallback。
-- `/healthz` 与 `/v1/models` 不调用上游，也不返回凭据；`/v1/responses` 必须携带本地 bearer。
+- `/healthz` 与 `/v1/models` 不调用上游，也不返回凭据；`/v1/responses` 与受管
+  handoff staging endpoint 都必须携带本地 bearer。staging endpoint 只接受固定
+  `v4_flash_worker` assignment，并执行已安装 Hook 的 stage 模式。
 - macOS LaunchAgent plist 不含凭据，并在非正常退出后由 `launchd` 自动重启。
 
 ## External data boundary

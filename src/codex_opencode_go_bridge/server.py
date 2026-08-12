@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -41,6 +42,10 @@ class UpstreamError(RuntimeError):
         self.status = status
 
 
+class HandoffStageError(RuntimeError):
+    """The managed service could not publish the one-shot handoff."""
+
+
 @dataclass(frozen=True)
 class BridgeConfig:
     upstream_api_key: str = field(repr=False)
@@ -53,6 +58,13 @@ class BridgeConfig:
         / ".codex"
         / "opencode-go-subagent"
         / "state.sqlite3"
+    )
+    handoff_script_path: Path = field(
+        default_factory=lambda: Path.home()
+        / ".codex"
+        / "hooks"
+        / "codex-opencode-go-subagent"
+        / "plaintext_handoff.py"
     )
     timeout_seconds: float = 300.0
 
@@ -87,7 +99,14 @@ class BridgeConfig:
         if host not in {"127.0.0.1", "::1", "localhost"}:
             raise ConfigError("bridge host must be loopback")
         upstream_base = values.get("OPENCODE_GO_BASE_URL", DEFAULT_UPSTREAM_BASE).rstrip("/")
-        state_default = Path.home() / ".codex" / "opencode-go-subagent" / "state.sqlite3"
+        codex_home = Path(values.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
+        state_default = codex_home / "opencode-go-subagent" / "state.sqlite3"
+        handoff_default = (
+            codex_home
+            / "hooks"
+            / "codex-opencode-go-subagent"
+            / "plaintext_handoff.py"
+        )
         return cls(
             upstream_api_key=upstream_key,
             local_token=local_token,
@@ -95,12 +114,86 @@ class BridgeConfig:
             host=host,
             port=int(values.get("CODEX_OPENCODE_BRIDGE_PORT", str(DEFAULT_PORT))),
             state_path=Path(values.get("CODEX_OPENCODE_BRIDGE_STATE", str(state_default))).expanduser(),
+            handoff_script_path=Path(
+                values.get("CODEX_OPENCODE_HANDOFF_SCRIPT", str(handoff_default))
+            ).expanduser(),
             timeout_seconds=float(values.get("CODEX_OPENCODE_UPSTREAM_TIMEOUT", "300")),
         )
 
 
 class Upstream(Protocol):
     def complete(self, payload: JSON) -> JSON: ...
+
+
+class HandoffStager(Protocol):
+    def stage(self, assignment: str) -> JSON: ...
+
+
+HANDOFF_ENV_ALLOWLIST = (
+    "LANG",
+    "LC_ALL",
+    "PATH",
+    "TMPDIR",
+)
+
+
+class SubprocessHandoffStager:
+    def __init__(
+        self,
+        script_path: Path,
+        *,
+        timeout_seconds: float = 10.0,
+        runner=None,
+        environ: Mapping[str, str] | None = None,
+        redactions: tuple[str, ...] = (),
+    ):
+        self.script_path = Path(script_path)
+        self.timeout_seconds = timeout_seconds
+        self.runner = subprocess.run if runner is None else runner
+        source_environment = os.environ if environ is None else environ
+        self.environment = {
+            name: source_environment[name]
+            for name in HANDOFF_ENV_ALLOWLIST
+            if source_environment.get(name)
+        }
+        self.redactions = tuple(value for value in redactions if value)
+
+    def stage(self, assignment: str) -> JSON:
+        if not assignment.strip():
+            raise HandoffStageError("refusing to stage an empty Flash assignment")
+        try:
+            result = self.runner(
+                [sys.executable, str(self.script_path), "--mode", "stage"],
+                input=assignment,
+                text=True,
+                capture_output=True,
+                timeout=self.timeout_seconds,
+                check=False,
+                env=self.environment,
+            )
+        except (OSError, subprocess.SubprocessError):
+            raise HandoffStageError("managed plaintext handoff process failed") from None
+        if result.returncode != 0:
+            message = (result.stderr or "").strip()[:1000]
+            for sensitive_value in (assignment, *self.redactions):
+                if sensitive_value:
+                    message = message.replace(sensitive_value, "[REDACTED]")
+            raise HandoffStageError(message or "managed plaintext handoff stage failed")
+        try:
+            parsed = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            raise HandoffStageError("managed plaintext handoff returned invalid JSON") from None
+        if (
+            not isinstance(parsed, dict)
+            or parsed.get("staged") is not True
+            or parsed.get("agent_type") != "v4_flash_worker"
+        ):
+            raise HandoffStageError("managed plaintext handoff returned an invalid result")
+        return {
+            key: parsed[key]
+            for key in ("staged", "handoff_id", "agent_type", "expires_at")
+            if key in parsed
+        }
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -221,10 +314,18 @@ def _json_error(status: int, error_type: str, message: str) -> tuple[int, str, b
 
 
 class BridgeService:
-    def __init__(self, config: BridgeConfig, store: SQLiteStateStore, upstream: Upstream):
+    def __init__(
+        self,
+        config: BridgeConfig,
+        store: SQLiteStateStore,
+        upstream: Upstream,
+        *,
+        handoff_stager: HandoffStager | None = None,
+    ):
         self.config = config
         self.store = store
         self.upstream = upstream
+        self.handoff_stager = handoff_stager
 
     def _authorized(self, authorization: str | None) -> bool:
         if authorization is None:
@@ -266,6 +367,28 @@ class BridgeService:
             print(f"bridge internal error: {type(error).__name__}", file=sys.stderr)
             return _json_error(500, "bridge_error", "local bridge failed")
 
+    def stage_handoff(self, body: JSON, authorization: str | None) -> tuple[int, str, bytes]:
+        if not self._authorized(authorization):
+            return _json_error(401, "authentication_error", "invalid local bridge token")
+        assignment = body.get("assignment")
+        if not isinstance(assignment, str) or not assignment.strip():
+            return _json_error(
+                400,
+                "invalid_request_error",
+                "handoff assignment must be a non-empty string",
+            )
+        if self.handoff_stager is None:
+            return _json_error(503, "handoff_error", "managed handoff staging is unavailable")
+        try:
+            result = self.handoff_stager.stage(assignment)
+        except HandoffStageError as error:
+            return _json_error(409, "handoff_error", str(error))
+        except Exception as error:
+            print(f"managed handoff internal error: {type(error).__name__}", file=sys.stderr)
+            return _json_error(500, "handoff_error", "managed handoff staging failed")
+        data = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
+        return 200, "application/json", data
+
 
 class _BridgeHandler(BaseHTTPRequestHandler):
     server_version = "CodexOpenCodeGoBridge/0.1"
@@ -297,7 +420,11 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         self._send(*_json_error(404, "not_found", "endpoint not found"))
 
     def do_POST(self) -> None:
-        if self.path.rstrip("/") != "/v1/responses":
+        path = self.path.rstrip("/")
+        if path not in {
+            "/v1/responses",
+            "/internal/handoffs/v4_flash_worker/stage",
+        }:
             self._send(*_json_error(404, "not_found", "endpoint not found"))
             return
         try:
@@ -317,7 +444,10 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             self._send(*_json_error(400, "invalid_request_error", "request body must be an object"))
             return
-        result = self.service.respond(body, self.headers.get("Authorization"))
+        if path == "/internal/handoffs/v4_flash_worker/stage":
+            result = self.service.stage_handoff(body, self.headers.get("Authorization"))
+        else:
+            result = self.service.respond(body, self.headers.get("Authorization"))
         self._send(*result)
 
     def log_message(self, format: str, *args: Any) -> None:
@@ -328,7 +458,15 @@ class _BridgeHandler(BaseHTTPRequestHandler):
 def make_server(config: BridgeConfig, service: BridgeService | None = None) -> ThreadingHTTPServer:
     if service is None:
         store = SQLiteStateStore(config.state_path)
-        service = BridgeService(config, store, OpenCodeGoClient(config))
+        service = BridgeService(
+            config,
+            store,
+            OpenCodeGoClient(config),
+            handoff_stager=SubprocessHandoffStager(
+                config.handoff_script_path,
+                redactions=(config.upstream_api_key, config.local_token),
+            ),
+        )
     server = ThreadingHTTPServer((config.host, config.port), _BridgeHandler)
     server.bridge_service = service  # type: ignore[attr-defined]
     server.daemon_threads = True

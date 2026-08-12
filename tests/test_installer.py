@@ -175,6 +175,33 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("Git operations", agents)
         self.assertIn("preselected GPT parent", agents)
         self.assertIn("gpt_review_worker", agents)
+        self.assertIn("analysis, audit, assessment", agents)
+        self.assertIn("pure extraction", agents)
+        self.assertNotIn("Analysis is non-mutating by default", agents)
+
+        self.assertIn("task mode (`coding` or `extraction`)", skill)
+        self.assertIn("Never send an analysis or audit assignment", skill)
+        self.assertIn("stage-handoff", skill)
+        self.assertIn("Do not fall back to direct filesystem staging", skill)
+
+    def test_every_v4_policy_surface_keeps_analysis_and_audit_on_gpt(self):
+        surfaces = {
+            "root AGENTS": (self.repo_root / "AGENTS.md").read_text(),
+            "installed AGENTS snippet": (self.repo_root / "snippets" / "AGENTS.md").read_text(),
+            "worker role": (self.repo_root / "agents" / "v4-flash-worker.toml").read_text(),
+            "worker skill": (
+                self.repo_root / "skills" / "use-v4-flash-worker" / "SKILL.md"
+            ).read_text(),
+        }
+
+        for name, policy in surfaces.items():
+            with self.subTest(name=name):
+                lowered = policy.lower()
+                self.assertIn("analysis", lowered)
+                self.assertIn("audit", lowered)
+                self.assertIn("gpt", lowered)
+                self.assertNotIn("analysis is non-mutating by default", lowered)
+                self.assertNotIn("analysis by default", lowered)
 
     def test_uninstall_removes_only_managed_files_and_hook(self):
         install(self.repo_root, self.codex_home)

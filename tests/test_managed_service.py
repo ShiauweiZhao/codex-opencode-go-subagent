@@ -5,7 +5,10 @@ import plistlib
 import secrets
 import subprocess
 import tempfile
+import threading
 import unittest
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
@@ -397,8 +400,126 @@ class ManagedBridgeServiceTests(unittest.TestCase):
             ],
         )
 
+    def test_stage_handoff_delegates_to_local_service_without_filesystem_write(self):
+        self.keychain.values["bridge-token"] = "local-secret-value"
+        calls = []
+        service = ManagedBridgeService(
+            codex_home=self.codex_home,
+            user_home=self.user_home,
+            keychain=self.keychain,
+            runner=FakeRunner(),
+            health_checker=lambda: True,
+            handoff_sender=lambda assignment, token: calls.append((assignment, token))
+            or {
+                "staged": True,
+                "handoff_id": "12345678-1234-5678-1234-567812345678",
+                "agent_type": "v4_flash_worker",
+                "expires_at": "2026-08-12T02:00:00+00:00",
+            },
+        )
+
+        report = service.stage_handoff("bounded assignment")
+
+        self.assertTrue(report["staged"])
+        self.assertEqual(calls, [("bounded assignment", "local-secret-value")])
+        self.assertNotIn("bounded assignment", json.dumps(report))
+
 
 class ServiceEntryPointTests(unittest.TestCase):
+    def test_local_handoff_opener_ignores_environment_proxies(self):
+        with patch.dict(
+            os.environ,
+            {
+                "HTTP_PROXY": "http://proxy.invalid:8080",
+                "HTTPS_PROXY": "http://proxy.invalid:8080",
+                "NO_PROXY": "",
+            },
+            clear=False,
+        ):
+            opener = managed_service_module._local_only_opener()
+
+        proxy_handlers = [
+            handler
+            for handler in opener.handlers
+            if isinstance(handler, urllib.request.ProxyHandler)
+        ]
+        self.assertEqual(proxy_handlers, [])
+
+    def test_local_handoff_client_refuses_redirect_without_leaking_bearer(self):
+        class RedirectHandler(BaseHTTPRequestHandler):
+            sink_authorizations = []
+
+            def do_POST(self):
+                if self.path == "/stage":
+                    self.send_response(302)
+                    self.send_header("Location", "/sink")
+                    self.end_headers()
+                    return
+                self.sink_authorizations.append(self.headers.get("Authorization"))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"staged":true,"agent_type":"v4_flash_worker"}')
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        def cleanup_server():
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        self.addCleanup(cleanup_server)
+
+        url = f"http://127.0.0.1:{server.server_port}/stage"
+        with patch.object(managed_service_module, "HANDOFF_STAGE_URL", url):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 302") as caught:
+                managed_service_module._send_handoff_to_local_bridge(
+                    "bounded assignment",
+                    "local-secret",
+                )
+
+        self.assertEqual(RedirectHandler.sink_authorizations, [])
+        self.assertNotIn("bounded assignment", str(caught.exception))
+        self.assertNotIn("local-secret", str(caught.exception))
+
+    def test_local_handoff_client_redacts_untrusted_error_body(self):
+        assignment = "sensitive assignment text"
+        token = "local-secret"
+        body = json.dumps(
+            {"error": {"message": f"received {assignment} with Bearer {token}"}}
+        ).encode()
+        error = managed_service_module.urllib.error.HTTPError(
+            managed_service_module.HANDOFF_STAGE_URL,
+            409,
+            "Conflict",
+            {},
+            io.BytesIO(body),
+        )
+
+        class FailingOpener:
+            def open(self, request, timeout):
+                raise error
+
+        with patch.object(
+            managed_service_module,
+            "_local_only_opener",
+            return_value=FailingOpener(),
+        ):
+            with self.assertRaises(RuntimeError) as caught:
+                managed_service_module._send_handoff_to_local_bridge(
+                    assignment,
+                    token,
+                )
+
+        self.assertNotIn(assignment, str(caught.exception))
+        self.assertNotIn(token, str(caught.exception))
+        self.assertIn("[REDACTED]", str(caught.exception))
+
     def test_print_bridge_token_never_prints_the_upstream_key(self):
         keychain = FakeKeychain()
         keychain.values.update(
@@ -429,6 +550,25 @@ class ServiceEntryPointTests(unittest.TestCase):
         self.assertEqual(observed["OPENCODE_GO_API_KEY"], "upstream-secret")
         self.assertEqual(observed["CODEX_OPENCODE_BRIDGE_TOKEN"], "local-token")
         self.assertEqual(environ, {"PRESERVED": "yes"})
+
+    def test_run_bridge_exposes_and_restores_the_installed_codex_home(self):
+        keychain = FakeKeychain()
+        keychain.values.update(
+            {"upstream-api-key": "upstream-secret", "bridge-token": "local-token"}
+        )
+        environ = {"CODEX_HOME": "/previous/codex-home"}
+        observed = {}
+
+        result = run_bridge(
+            keychain,
+            environ,
+            lambda: observed.update(environ) or 0,
+            codex_home=Path("/installed/codex-home"),
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(observed["CODEX_HOME"], "/installed/codex-home")
+        self.assertEqual(environ, {"CODEX_HOME": "/previous/codex-home"})
 
     def test_status_cli_prints_structured_json(self):
         class FakeService:
@@ -550,6 +690,58 @@ class ServiceEntryPointTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(output.getvalue())["status"], "local_token_rotated")
+
+    def test_stage_handoff_cli_reads_assignment_from_stdin_without_echoing_it(self):
+        class FakeService:
+            def __init__(self):
+                self.assignment = None
+
+            def stage_handoff(self, assignment):
+                self.assignment = assignment
+                return {
+                    "staged": True,
+                    "handoff_id": "12345678-1234-5678-1234-567812345678",
+                    "agent_type": "v4_flash_worker",
+                    "expires_at": "2026-08-12T02:00:00+00:00",
+                }
+
+        service = FakeService()
+        output = io.StringIO()
+
+        code = main(
+            ["stage-handoff"],
+            service_factory=lambda: service,
+            input_stream=io.StringIO("secret-free bounded assignment"),
+            output=output,
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(service.assignment, "secret-free bounded assignment")
+        self.assertNotIn("secret-free bounded assignment", output.getvalue())
+        self.assertTrue(json.loads(output.getvalue())["staged"])
+
+    def test_stage_handoff_cli_failure_is_controlled_and_does_not_echo_assignment(self):
+        assignment = "do not echo failed assignment"
+
+        class FakeService:
+            def stage_handoff(self, received):
+                raise RuntimeError(f"slot occupied while staging {received}")
+
+        output = io.StringIO()
+        errors = io.StringIO()
+
+        code = main(
+            ["stage-handoff"],
+            service_factory=lambda: FakeService(),
+            input_stream=io.StringIO(assignment),
+            output=output,
+            error_output=errors,
+        )
+
+        self.assertEqual(code, 12)
+        self.assertEqual(output.getvalue(), "")
+        self.assertIn("stage-handoff failed", errors.getvalue())
+        self.assertNotIn(assignment, errors.getvalue())
 
 
 if __name__ == "__main__":

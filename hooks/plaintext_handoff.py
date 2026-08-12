@@ -24,17 +24,21 @@ class EnvelopeError(ValueError):
     pass
 
 
+def script_local_state_root(script_path: Optional[pathlib.Path] = None) -> pathlib.Path:
+    script = pathlib.Path(__file__) if script_path is None else pathlib.Path(script_path)
+    resolved = script.expanduser().resolve()
+    hooks_directory = next(
+        (parent for parent in resolved.parents if parent.name == "hooks"),
+        None,
+    )
+    install_root = hooks_directory.parent if hooks_directory else resolved.parent
+    return install_root / "opencode-go-subagent" / "handoff-state"
+
+
 def state_root(value: Optional[str]) -> pathlib.Path:
     if value:
         return pathlib.Path(value).expanduser().resolve()
-    override = os.environ.get("CODEX_DEEPSEEK_HANDOFF_DIR")
-    if override:
-        return pathlib.Path(override).expanduser().resolve()
-    if os.name == "nt":
-        local_app_data = os.environ.get("LOCALAPPDATA")
-        if local_app_data:
-            return pathlib.Path(local_app_data) / "Codex" / "plaintext-subagent-handoff"
-    return pathlib.Path(os.environ.get("XDG_STATE_HOME", pathlib.Path.home() / ".local" / "state")) / "codex" / "plaintext-subagent-handoff"
+    return script_local_state_root()
 
 
 def fail(message: str, code: int) -> None:
