@@ -24,6 +24,23 @@ Responses→Chat bridge，并复用经过并发/一次性交付测试的 plainte
   同时满足 parent sandbox 和 assignment 授权；角色指令本身不是独立权限边界。
 - Codex Auto-review 只处理 sandbox 边界审批，不等同于代码 review。V4 任务必须保持在
   已授权 sandbox 内；需要任何提权时停止并回交 GPT，不把审批请求转发给 DeepSeek。
+- 已验证 Codex 0.147 custom-child 路径中，特性列表把 `apply_patch_freeform`
+  标记为移除，且观测到的 0.147 V4 custom-child request 未暴露自定义 apply_patch
+  工具（仅指该已验证路径，不推广到所有 child 或未来版本）。当 Codex 暴露
+  `exec_command` 而未暴露自定义 apply_patch 时，bridge 向 V4 暴露结构化
+  `apply_patch` 函数（参数 `{patch, workdir}`），并以 `shlex.quote` 把该调用
+  映射为 argv 恰好等于 `[apply_patch, 原始patch]` 的规范 Codex `exec_command`。
+  所有授权写入必须使用该结构化工具；禁止手工构造 `exec_command` 写命令、
+  heredoc、重定向以及 `cat`/`sed`/`perl`/`python` 写文件技巧，也不允许审批
+  绕过。结构化 apply_patch 缺失或写入被拒绝时，V4 必须停止并返回
+  `ESCALATE_TO_GPT`。
+- GPT 负责规划、代码 review、安全与最终验证；V4 只执行明确 writable scope 内
+  的受控实现。per-child model catalog 只提供模型元数据，不声明
+  `apply_patch_tool_type`，也不启用任何原生自定义工具。
+- 控制面沿用 Utopia-V 的 standalone child agent、一次性 plaintext Hook 与 native
+  callback 边界：上游 Utopia 仓库仅作只读参考，本仓库不随其改版自动变更；这里的
+  编码只允许在明确 writable scope 与验证命令下进行，规划、架构、review、安全与
+  最终验证留在预选 GPT。
 - 不使用 MCP、OpenCode CLI、第二个 Codex CLI 或完整 `opencode-bridge` runtime。
 - macOS 上游 API key 与独立本地 bearer 存在登录 Keychain；LaunchAgent plist、
   agent TOML、Hook 状态、进程参数和日志都不包含密钥值。
@@ -164,6 +181,11 @@ python3 scripts/install.py uninstall --purge-secrets
 - 没有图像输入、fallback、自动 worktree 隔离或把复杂工作降级给 V4。
 - Codex 当前会让 native child 继承 parent 的运行时权限。仓库能约束任务路由和
   worker 行为，但不能从 agent TOML 独立收紧 sandbox；这是上游 spawn 配置顺序的限制。
+- 特性列表把 Codex 0.147 的 `apply_patch_freeform` 标记为移除，且观测到的
+  0.147 V4 custom-child request 未暴露自定义 apply_patch；该结论只覆盖已验证
+  路径，不推广到所有 child 或未来版本。V4 写入必须走 bridge 提供的结构化
+  `apply_patch` 工具（`{patch, workdir}`），不能依赖 agent 级原生工具或手工
+  构造写命令。
 - OpenCode Go 的模型列表、限额、价格和数据保留会变化，使用前以
   [官方 Go 文档](https://dev.opencode.ai/docs/go/) 为准。
 

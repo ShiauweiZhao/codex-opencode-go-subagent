@@ -25,7 +25,6 @@
       "priority": 0,
       "supported_in_api": true,
       "support_verbosity": false,
-      "apply_patch_tool_type": "freeform",
       "truncation_policy": {
         "mode": "tokens",
         "limit": 10000

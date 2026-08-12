@@ -77,7 +77,7 @@ class InstallerTests(unittest.TestCase):
         self.assertIn(f'model_catalog_json = "{model_catalog}"', agent)
         model = json.loads(model_catalog.read_text())["models"][0]
         self.assertEqual(model["slug"], "deepseek-v4-flash")
-        self.assertEqual(model["apply_patch_tool_type"], "freeform")
+        self.assertNotIn("apply_patch_tool_type", model)
         self.assertIsNone(model["auto_review_model_override"])
         self.assertNotIn("sandbox_mode", agent)
         self.assertIn("reapply the parent turn's runtime permission profile", agent)
@@ -148,6 +148,11 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("ESCALATE_TO_GPT", agent)
         self.assertIn("writable scope", agent)
         self.assertIn("Never commit, push, create pull requests", agent)
+        self.assertIn("structured apply_patch", agent)
+        self.assertIn("Never construct an exec_command write", agent)
+        self.assertIn("apply_patch_freeform", agent)
+        self.assertNotIn("apply_patch executable", agent)
+        self.assertNotIn("removed the native freeform apply_patch tool", agent)
         self.assertNotIn("Never modify files or external state", agent)
         self.assertNotIn("WRITE_SCOPE_UNSUPPORTED", agent)
 
@@ -157,6 +162,12 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("preselected", skill)
         self.assertIn("GPT parent", skill)
         self.assertIn("ESCALATE_TO_GPT", skill)
+        self.assertIn("rollout JSONL", skill)
+        self.assertIn("state.sqlite3", skill)
+        self.assertIn("Callback text is not authoritative", skill)
+        self.assertIn("safe_exec_apply_patch", skill)
+        self.assertIn("[apply_patch, original_patch]", skill)
+        self.assertIn("heredocs, redirection, script writes", skill)
 
         self.assertIn("simple, bounded, mechanically verifiable coding", agents)
         self.assertIn("explicit writable scope", agents)

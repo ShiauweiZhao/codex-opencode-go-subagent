@@ -30,6 +30,21 @@ permission profile 写回 child。因此 agent TOML 中的 `sandbox_mode = "read
 实现、代码 review 和最终验证留在预选 GPT；
 需要操作系统级写拒绝时，必须从 read-only parent 任务中 spawn。
 
+### Codex 0.147 兼容更新：bridge 结构化写入工具
+
+已验证 Codex 0.147 custom-child 路径的证据链是：特性列表把 `apply_patch_freeform`
+标记为移除，且观测到的 0.147 V4 custom-child request 未暴露自定义 apply_patch
+工具；该结论只覆盖已验证路径，不推广到所有 child 或未来版本。当 Codex 暴露
+`exec_command` 而未暴露自定义 apply_patch 时，bridge 会向 V4 暴露结构化
+`apply_patch` 函数（参数 `{patch, workdir}`），并以 `shlex.quote` 把该调用
+映射为 argv 恰好等于 `[apply_patch, 原始patch]` 的规范 Codex `exec_command`。
+因此 V4 的所有授权写入必须使用该结构化工具；禁止手工构造 `exec_command`
+写命令、heredoc、重定向以及 `cat`/`sed`/`perl`/`python` 写文件技巧，也不允许
+审批绕过。结构化 apply_patch 缺失或写入被拒绝时，V4 返回 `ESCALATE_TO_GPT`。
+per-child model catalog 只提供模型元数据，不再声明 `apply_patch_tool_type`，
+也不宣称能启用原生自定义工具。分工不变：GPT 负责规划、review、安全与最终
+验证，V4 只执行明确 writable scope 内的受控实现。
+
 ## 为什么必须有协议适配
 
 OpenCode Go 官方当前把 `deepseek-v4-flash` 暴露为：
@@ -128,7 +143,9 @@ V4 child 产出限定范围 diff
 
 - `agents/v4-flash-worker.toml`
 - `agents/gpt-review-worker.toml`（不固定 model/provider，继承 GPT parent）
-- per-child model catalog（只为 V4 启用原生 freeform apply_patch；不承载 GPT 审批或 review）
+- per-child model catalog（仅提供模型元数据；特性列表把 0.147 的
+  `apply_patch_freeform` 标记为移除，不声明 `apply_patch_tool_type`，也不启用
+  原生自定义工具，不承载 GPT 审批或 review）
 - `skills/use-v4-flash-worker/`
 - `hooks/plaintext_handoff.py` 及其 POSIX 协议测试
 - `bridge/`：Responses↔Chat 的纯协议适配、SSE、tool calls、tool-result continuation、短期 state、`/health`
@@ -137,7 +154,7 @@ V4 child 产出限定范围 diff
 - `tests/`：handoff 协议、转换 fixtures、SSE、工具续轮、安装等价性
 - `prompts/quick-smoke-test.md`：一次最小付费 native child 测试
 
-明确不做：修改顶层 `model` / `model_provider`、自定义全局 model catalog、关闭整个 session 的 V2、fallback 到其他模型、通过 bridge 转发 GPT、MCP、另一个 Codex CLI、MissionV1、把复杂工作交给 V4、无 assignment 授权的写入、自动 worktree，或虚假宣称 child role 能独立强制权限边界。
+明确不做：修改顶层 `model` / `model_provider`、自定义全局 model catalog、关闭整个 session 的 V2、fallback 到其他模型、通过 bridge 转发 GPT、MCP、另一个 Codex CLI、MissionV1、把复杂工作交给 V4、无 assignment 授权的写入、自动 worktree、宣称 model catalog 启用原生自定义工具，或虚假宣称 child role 能独立强制权限边界。
 
 ### 凭据边界
 
@@ -167,12 +184,12 @@ V4 child 产出限定范围 diff
 2. plaintext handoff 的 collision、原子发布、精确 role、一次消费、replay 拒绝、TTL/损坏恢复、并发 at-most-once 测试通过。
 3. bridge fixtures 证明 Responses input、function tools、tool call delta、tool result continuation、SSE terminal event 和 usage 转换。
 4. bridge `doctor` 证明请求实际映射到 `deepseek-v4-flash`，且 GPT-family 请求 fail closed。
-5. 显式授权的小额 live smoke：预选 GPT parent 原生 spawn 指定 V4 child，先完成只读路由检查，再在临时 Git 仓库内只修改一个授权文件、运行测试并通过 native callback 返回；GPT reviewer 审查精确 diff，同时回查 V4 provider/model、GPT reviewer provider/model 与实际 permission profile 元数据。
+5. 显式授权的小额 live smoke：预选 GPT parent 原生 spawn 指定 V4 child，先完成只读路由检查，再在临时 Git 仓库内只修改一个授权文件、运行测试并通过 native callback 返回；GPT reviewer 按 marker 关联 parent-visible child rollout JSONL（`$CODEX_HOME/sessions`）与 bridge SQLite response chain（`$CODEX_HOME/opencode-go-subagent/state.sqlite3`），核验 child 实际 tool-call 证据（bridge 端 `tool_types.apply_patch` 必须为 `safe_exec_apply_patch`，映射后的 `exec_command` 必须为规范 shell 引号且解析 argv 恰好为 `[apply_patch, 原始patch]`；拒绝 callback 文本、手工 `exec_command` 写命令、heredoc、重定向、脚本写文件与审批请求）与精确 diff，同时回查 V4 provider/model、GPT reviewer provider/model 与实际 permission profile 元数据。
 6. cancel 与超时均明确失败；bridge 重启后只从私有 SQLite 恢复已提交的 continuation state，缺失状态时明确失败，不静默换模型、直连 API 或继承 parent 历史。
 
 ## 最终决策
 
-**建新仓库。** 可以把它理解为“Utopia-V control plane + 精简 opencode-bridge transport”，而不是第三个大而全的 agent runtime。
+**建新仓库。** 可以把它理解为“Utopia-V control plane + 精简 opencode-bridge transport”，而不是第三个大而全的 agent runtime。上游 Utopia 参考保持只读、不随其改版自动变更；本仓库允许编码的唯一条件是 GPT parent 提供明确 writable scope 与验证命令，规划、架构、review、安全与最终验证始终留在预选 GPT。
 
 开发顺序建议：先做“简单任务走 V4、复杂/规划/review 走预选 GPT”的条件路由、显式范围内写入、macOS/POSIX 主链并跑 live smoke；再补 Windows；最后才考虑自动 worktree或更多 OpenCode Go 模型。首版不要加入 runtime fallback，失败应明确暴露在 assignment、bridge、provider、reviewer 或 callback 的具体边界。
 

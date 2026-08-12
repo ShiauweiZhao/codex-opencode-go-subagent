@@ -1,4 +1,5 @@
 import json
+import shlex
 import tempfile
 import unittest
 from pathlib import Path
@@ -133,6 +134,72 @@ class BridgeServiceTests(unittest.TestCase):
         self.assertEqual(upstream.requests[0]["model"], "deepseek-v4-flash")
         response_id = self._completed_response(data)["id"]
         self.assertEqual(self.store.get(response_id)["messages"][-1]["content"], "done")
+
+    def test_maps_structured_safe_patch_to_canonical_exec_command(self):
+        patch = (
+            "*** Begin Patch\n"
+            "*** Add File: quoted.txt\n"
+            "+$(touch SENTINEL) ' \" `touch SENTINEL` ; & |\n"
+            "*** End Patch"
+        )
+        upstream = FakeUpstream(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_safe_patch",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "apply_patch",
+                                        "arguments": json.dumps(
+                                            {"patch": patch, "workdir": "/tmp/authorized repo"}
+                                        ),
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        )
+        service = BridgeService(self.config, self.store, upstream)
+
+        status, _, data = service.respond(
+            {
+                "model": "deepseek-v4-flash",
+                "input": "implement",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "exec_command",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"cmd": {"type": "string"}},
+                            "required": ["cmd"],
+                        },
+                    }
+                ],
+            },
+            authorization="Bearer local-secret",
+        )
+
+        self.assertEqual(status, 200)
+        upstream_tool_names = {
+            item["function"]["name"] for item in upstream.requests[0]["tools"]
+        }
+        self.assertEqual(upstream_tool_names, {"exec_command", "apply_patch"})
+        response = self._completed_response(data)
+        call = response["output"][0]
+        arguments = json.loads(call["arguments"])
+        self.assertEqual(call["name"], "exec_command")
+        self.assertEqual(arguments["workdir"], "/tmp/authorized repo")
+        self.assertEqual(arguments["cmd"], f"apply_patch {shlex.quote(patch)}")
+        self.assertEqual(shlex.split(arguments["cmd"]), ["apply_patch", patch])
+        state = self.store.get(response["id"])
+        self.assertEqual(state["tool_types"]["apply_patch"], "safe_exec_apply_patch")
 
     def test_continues_tool_result_using_previous_response_state(self):
         first = FakeUpstream(
