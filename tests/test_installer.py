@@ -131,23 +131,37 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(agents_text.startswith("existing instructions\n"))
         self.assertEqual(agents_text.count("codex-opencode-go-subagent:start"), 1)
 
-    def test_installed_policy_allows_only_explicitly_scoped_coding(self):
+    def test_installed_policy_defaults_implementation_to_v4_with_explicit_scope(self):
         install(self.repo_root, self.codex_home)
 
-        agent = (self.codex_home / "agents" / "v4-flash-worker.toml").read_text()
-        skill = (
-            self.codex_home
-            / "skills"
-            / "use-v4-flash-worker"
-            / "SKILL.md"
-        ).read_text()
-        agents = (self.codex_home / "AGENTS.md").read_text()
+        def collapsed(text):
+            return " ".join(text.split())
 
+        agent = collapsed(
+            (self.codex_home / "agents" / "v4-flash-worker.toml").read_text()
+        )
+        skill = collapsed(
+            (
+                self.codex_home
+                / "skills"
+                / "use-v4-flash-worker"
+                / "SKILL.md"
+            ).read_text()
+        )
+        agents = collapsed((self.codex_home / "AGENTS.md").read_text())
+
+        self.assertIn("Code implementation defaults to", agent)
+        self.assertIn("complexity is not by itself a reason", agent)
+        self.assertIn("self-contained assignment", agent)
+        self.assertIn("task decomposition", agent)
+        self.assertNotIn("Start multiple V4 workers", agent)
         self.assertIn("explicitly authorizes a coding task", agent)
-        self.assertIn("simple, bounded work", agent)
+        self.assertIn("explicit writable scope", agent)
+        self.assertIn("validation commands", agent)
         self.assertIn("ESCALATE_TO_GPT", agent)
-        self.assertIn("writable scope", agent)
         self.assertIn("Never commit, push, create pull requests", agent)
+        self.assertIn("final review or verification", agent)
+        self.assertIn("fails closed", agent)
         self.assertIn("structured apply_patch", agent)
         self.assertIn("Never construct an exec_command write", agent)
         self.assertIn("apply_patch_freeform", agent)
@@ -155,8 +169,22 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn("removed the native freeform apply_patch tool", agent)
         self.assertNotIn("Never modify files or external state", agent)
         self.assertNotIn("WRITE_SCOPE_UNSUPPORTED", agent)
+        self.assertNotIn("only simple coding", agent)
+        self.assertNotIn("only simple, bounded", agent)
+        self.assertNotIn("complex implementation stays", agent)
 
-        self.assertIn("simple, bounded, mechanically verifiable coding", skill)
+        self.assertIn("Code implementation defaults to", skill)
+        self.assertIn("complexity is not by itself a reason", skill)
+        self.assertIn(
+            "Start multiple V4 workers in parallel when the work splits into "
+            "independent, non-conflicting, dependency-free writable scopes",
+            skill,
+        )
+        self.assertIn(
+            "sequentially only when batches share dependencies or edit the "
+            "same files",
+            skill,
+        )
         self.assertIn("explicit writable scope", skill)
         self.assertIn("validation commands", skill)
         self.assertIn("preselected", skill)
@@ -168,23 +196,40 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("safe_exec_apply_patch", skill)
         self.assertIn("[apply_patch, original_patch]", skill)
         self.assertIn("heredocs, redirection, script writes", skill)
+        self.assertIn("task mode (`coding` or `extraction`)", skill)
+        self.assertIn("Never send an analysis or audit assignment", skill)
+        self.assertIn("stage-handoff", skill)
+        self.assertIn("Do not fall back to direct filesystem staging", skill)
+        self.assertNotIn("only simple coding", skill)
+        self.assertNotIn("complex implementation stays", skill)
 
-        self.assertIn("simple, bounded, mechanically verifiable coding", agents)
+        self.assertIn("Code implementation defaults to", agents)
+        self.assertIn("complexity is not by itself a reason", agents)
+        self.assertIn(
+            "Start multiple V4 workers in parallel when the work splits into "
+            "independent, non-conflicting, dependency-free writable scopes",
+            agents,
+        )
+        self.assertIn(
+            "fall back to sequential execution only for dependent batches or "
+            "same-file conflicts",
+            agents,
+        )
         self.assertIn("explicit writable scope", agents)
+        self.assertIn("validation", agents)
+        self.assertIn("commands", agents)
         self.assertIn("final verification", agents)
         self.assertIn("Git operations", agents)
         self.assertIn("preselected GPT parent", agents)
         self.assertIn("gpt_review_worker", agents)
         self.assertIn("analysis, audit, assessment", agents)
         self.assertIn("pure extraction", agents)
+        self.assertIn("fails closed", agents)
         self.assertNotIn("Analysis is non-mutating by default", agents)
+        self.assertNotIn("only simple coding", agents)
+        self.assertNotIn("complex implementation stays", agents)
 
-        self.assertIn("task mode (`coding` or `extraction`)", skill)
-        self.assertIn("Never send an analysis or audit assignment", skill)
-        self.assertIn("stage-handoff", skill)
-        self.assertIn("Do not fall back to direct filesystem staging", skill)
-
-    def test_every_v4_policy_surface_keeps_analysis_and_audit_on_gpt(self):
+    def test_every_v4_policy_surface_keeps_judgment_and_git_on_gpt(self):
         surfaces = {
             "root AGENTS": (self.repo_root / "AGENTS.md").read_text(),
             "installed AGENTS snippet": (self.repo_root / "snippets" / "AGENTS.md").read_text(),
@@ -192,16 +237,87 @@ class InstallerTests(unittest.TestCase):
             "worker skill": (
                 self.repo_root / "skills" / "use-v4-flash-worker" / "SKILL.md"
             ).read_text(),
+            "worker skill yaml": (
+                self.repo_root
+                / "skills"
+                / "use-v4-flash-worker"
+                / "agents"
+                / "openai.yaml"
+            ).read_text(),
         }
 
         for name, policy in surfaces.items():
             with self.subTest(name=name):
                 lowered = policy.lower()
+                # Default code implementation belongs to V4.
+                self.assertIn("implementation", lowered)
+                self.assertIn("v4", lowered)
+                # Judgment, review, final verification, and Git stay on GPT.
+                self.assertIn("gpt", lowered)
                 self.assertIn("analysis", lowered)
                 self.assertIn("audit", lowered)
-                self.assertIn("gpt", lowered)
+                self.assertIn("review", lowered)
+                self.assertIn("final verification", lowered)
+                self.assertIn("git", lowered)
+                # Every coding assignment stays explicit-scope and validated.
+                self.assertIn("writable scope", lowered)
+                self.assertIn("validation", lowered)
+                self.assertIn("escalate_to_gpt", lowered)
+                # Old routing semantics must not remain.
+                self.assertNotIn("only simple coding", lowered)
+                self.assertNotIn("only simple, bounded", lowered)
+                self.assertNotIn("complex implementation stays", lowered)
+                self.assertNotIn("complex implementation remains", lowered)
+                self.assertNotIn("ambiguous or complex implementation", lowered)
                 self.assertNotIn("analysis is non-mutating by default", lowered)
                 self.assertNotIn("analysis by default", lowered)
+
+    def test_docs_and_security_describe_default_implementation_routing(self):
+        docs = {
+            "README": (self.repo_root / "README.md").read_text(),
+            "SECURITY": (self.repo_root / "SECURITY.md").read_text(),
+            "architecture decision": (
+                self.repo_root / "docs" / "architecture-decision.md"
+            ).read_text(),
+            "design plan": (
+                self.repo_root
+                / "docs"
+                / "plans"
+                / "2026-08-11-explicit-coding-worker-design.md"
+            ).read_text(),
+        }
+
+        for name, text in docs.items():
+            with self.subTest(name=name):
+                lowered = text.lower()
+                self.assertIn("v4", lowered)
+                self.assertIn("gpt", lowered)
+                self.assertIn("implementation", lowered)
+                self.assertIn("writable scope", lowered)
+                self.assertIn("validation", lowered)
+                self.assertIn("escalate_to_gpt", lowered)
+                self.assertIn("git", lowered)
+                self.assertNotIn("only simple coding", lowered)
+                self.assertNotIn("only simple, bounded", lowered)
+                self.assertNotIn("complex implementation stays", lowered)
+
+        concurrency_tokens = {
+            "README": ("并行", "顺序执行", "同一文件"),
+            "SECURITY": ("并行", "顺序执行", "同一文件"),
+            "architecture decision": ("并行", "顺序执行", "同一文件"),
+            "design plan": ("in parallel", "sequential", "same files"),
+        }
+        stale_semantics = ("默认单 worker", "单 worker 默认")
+        for name, tokens in concurrency_tokens.items():
+            with self.subTest(name=name + " concurrency policy"):
+                lowered = docs[name].lower()
+                self.assertIn("independent", lowered)
+                self.assertIn("non-conflicting", lowered)
+                self.assertIn("dependency-free", lowered)
+                for token in tokens:
+                    self.assertIn(token, lowered)
+                for stale in stale_semantics:
+                    self.assertNotIn(stale, lowered)
 
     def test_uninstall_removes_only_managed_files_and_hook(self):
         install(self.repo_root, self.codex_home)

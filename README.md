@@ -1,8 +1,9 @@
 # Codex OpenCode Go Subagent
 
-让 Codex 主任务继续使用用户预选的 GPT 模型和 ChatGPT 登录，只把 OpenCode Go
-套餐中的 `deepseek-v4-flash` 注册为处理简单、边界清晰任务的
-`v4_flash_worker` 子 Agent。规划、复杂实现、代码审查和最终验收仍由 GPT 完成。
+让 Codex 主任务继续使用用户预选的 GPT 模型和 ChatGPT 登录，把 OpenCode Go
+套餐中的 `deepseek-v4-flash` 注册为默认负责代码实现（default code
+implementation）的 `v4_flash_worker` 子 Agent。需求、分析、设计、架构、拆解、
+审查、最终验证、集成和 Git 由 GPT 负责。
 
 OpenCode Go 目前为该模型提供的是
 `https://opencode.ai/zen/go/v1/chat/completions`，而当前 Codex custom provider
@@ -15,13 +16,20 @@ Responses→Chat bridge，并复用经过并发/一次性交付测试的 plainte
 - 主 Agent 的顶层 `model`、`model_provider`、`config.toml` 和 ChatGPT 登录不变，
   安装器也不读取或改写主模型设置。
 - child 固定为 `deepseek-v4-flash`，不会 fallback 到其他模型。
-- V4 只处理简单、可机械验收的编码，以及不需要推理判断的逐项检索、提取和枚举。
-  分析、审计、评估、接入点梳理、测试缺口发现、规划、架构、复杂或含糊实现、代码
-  review 与最终判断都交给主 Agent 当前预选的 GPT；`gpt_review_worker` 只读并继承该模型。
-- 只读不等于适合 V4；凡是要回答“为什么、缺什么、应该怎么接、风险是什么”的任务
-  都属于 GPT。编码任务必须由 GPT parent 明确给出 writable scope、验证命令
-  和停止条件；child 不得超出范围，也不得 commit、push 或操作外部系统。任务执行中
-  一旦出现复杂度或歧义，必须停止并回交 GPT。
+- V4 Flash 默认负责代码实现：功能、修复、重构、测试、代码相关文档，以及 GPT
+  已解析接口/行为后的跨模块接线；不需要推理判断的逐项检索、提取和枚举也可以
+  交给 V4。复杂、多文件、跨模块本身不是拒绝 V4 的理由；GPT 先消除歧义并拆成
+  有界任务，再让 V4 实现。需求、分析、设计、架构、拆解、审查、最终验证、集成和
+  Git 由主 Agent 当前预选的 GPT 负责；`gpt_review_worker` 只读并继承该模型。
+- 凡是要回答“为什么、缺什么、应该怎么接、风险是什么”的任务，或涉及架构选择、
+  审查、最终验收、Git/PR、密钥/权限升级或 provider fallback 的工作，都属于 GPT。
+  编码任务必须由 GPT parent 明确给出 writable scope、validation commands 和
+  停止条件；child 不得超出范围，也不得 commit、push 或操作外部系统。V4 只在未
+  解决设计选择、需要扩大 scope、安全/后果性判断、缺失 scope/oracle 或 approval
+  boundary 时停止并返回 `ESCALATE_TO_GPT`；GPT 解决后尽可能把剩余编码重新交给 V4。
+- 并发策略：当开发工作可以拆成独立（independent）、无冲突（non-conflicting）、
+  无相互依赖（dependency-free）的 writable scopes 时，GPT parent 应主动并行启动
+  多个 V4 workers；只有批次之间存在依赖或修改同一文件时才顺序执行。
 - 当前 Codex 会在加载角色后重新应用 parent 的实时 permission profile。实际写入必须
   同时满足 parent sandbox 和 assignment 授权；角色指令本身不是独立权限边界。
 - Codex Auto-review 只处理 sandbox 边界审批，不等同于代码 review。V4 任务必须保持在
@@ -36,13 +44,13 @@ Responses→Chat bridge，并复用经过并发/一次性交付测试的 plainte
   heredoc、重定向以及 `cat`/`sed`/`perl`/`python` 写文件技巧，也不允许审批
   绕过。结构化 apply_patch 缺失或写入被拒绝时，V4 必须停止并返回
   `ESCALATE_TO_GPT`。
-- GPT 负责规划、代码 review、安全与最终验证；V4 只执行明确 writable scope 内
-  的受控实现。per-child model catalog 只提供模型元数据，不声明
+- GPT 负责需求、分析、设计、架构、拆解、审查、最终验证、集成与 Git；V4 默认负责
+  明确 writable scope 内的代码实现。per-child model catalog 只提供模型元数据，不声明
   `apply_patch_tool_type`，也不启用任何原生自定义工具。
 - 控制面沿用 Utopia-V 的 standalone child agent、一次性 plaintext Hook 与 native
   callback 边界：上游 Utopia 仓库仅作只读参考，本仓库不随其改版自动变更；这里的
-  编码只允许在明确 writable scope 与验证命令下进行，规划、架构、review、安全与
-  最终验证留在预选 GPT。
+  编码只允许在明确 writable scope 与验证命令下进行，需求、分析、设计、架构、
+  审查、最终验证、集成与 Git 留在预选 GPT。
 - 不使用 MCP、OpenCode CLI、第二个 Codex CLI 或完整 `opencode-bridge` runtime。
 - macOS 上游 API key 与独立本地 bearer 存在登录 Keychain；LaunchAgent plist、
   agent TOML、Hook 状态、进程参数和日志都不包含密钥值。
@@ -193,7 +201,7 @@ python3 scripts/install.py uninstall --purge-secrets
 
 - Linux 还没有 Secret Service/systemd 用户服务托管，需显式启动 bridge。
 - 没有 Windows PowerShell handoff。
-- 没有图像输入、fallback、自动 worktree 隔离或把复杂工作降级给 V4。
+- 没有图像输入、fallback 或自动 worktree 隔离。
 - Codex 当前会让 native child 继承 parent 的运行时权限。仓库能约束任务路由和
   worker 行为，但不能从 agent TOML 独立收紧 sandbox；这是上游 spawn 配置顺序的限制。
 - 特性列表把 Codex 0.147 的 `apply_patch_freeform` 标记为移除，且观测到的
