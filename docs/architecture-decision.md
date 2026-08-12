@@ -8,7 +8,7 @@
 
 新仓库采用两部分已经被分别验证过的设计：
 
-1. **控制面以 `Utopia-V/codex-deepseek-subagent` 为蓝本**：保留“主 Agent 仍走 OpenAI / ChatGPT 登录、provider 只写在 standalone child agent TOML、`fork_turns="none"`、一次性 `SubagentStart` plaintext handoff、no-write 行为约束、skill 路由、安装合同和本地协议测试”。
+1. **控制面以 `Utopia-V/codex-deepseek-subagent` 为蓝本**：保留“主 Agent 与复杂工作仍走用户预选的 GPT / ChatGPT 登录、provider 只写在 standalone V4 child agent TOML、`fork_turns="none"`、一次性 `SubagentStart` plaintext handoff、显式授权的简单条件写入、skill 路由、安装合同和本地协议测试”。
 2. **传输面从 `goldtetsola/opencode-bridge` 提取最小必要代码**：只保留 Codex Responses API 到 OpenCode Go Chat Completions 的协议转换、SSE、function tool call / tool result、`previous_response_id` 状态和健康检查；删除 MissionV1、patch escrow、event log、fallback model、GPT passthrough、certification/canary 等与本需求无关的体系。
 
 不建议把 `oil-oil` 作为基础；也不建议直接采用完整 `opencode-bridge`。原因不是它们不可用，而是二者的变更半径分别过大、运行面过重。
@@ -25,8 +25,10 @@ permission profile 写回 child。因此 agent TOML 中的 `sandbox_mode = "read
 [`multi_agents/spawn.rs`](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents/spawn.rs)
 与
 [`multi_agents_common.rs`](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents_common.rs)。
-本仓库因此移除该误导字段，把首版边界改为：worker developer policy 明确拒绝写入，
-parent 负责验证；需要操作系统级写拒绝时，必须从 read-only parent 任务中 spawn。
+本仓库因此移除该误导字段。V4 worker 只处理简单、可机械验收的任务，对分析默认不写；
+编码只有在 GPT parent 明确提供 writable scope 和验证命令时才能写入。规划、复杂
+实现、代码 review 和最终验证留在预选 GPT；
+需要操作系统级写拒绝时，必须从 read-only parent 任务中 spawn。
 
 ## 为什么必须有协议适配
 
@@ -91,7 +93,8 @@ OpenCode Go 使用 Chat Completions**。多出的本地进程换来了明确、�
 ## 推荐的最小架构
 
 ```text
-Codex 主 Agent（原 OpenAI provider / ChatGPT 登录）
+Codex 主 Agent（预选 GPT / 原 OpenAI provider / ChatGPT 登录）
+  planning / architecture / complex implementation / final validation
   |
   | stage 一次性明文 assignment
   | spawn_agent(agent_type="v4_flash_worker", fork_turns="none")
@@ -103,7 +106,7 @@ SubagentStart plaintext Hook（Utopia-V 模式）
 standalone child agent TOML
   model_provider = "opencode_go_bridge"
   model = "deepseek-v4-flash"
-  developer policy = no-write
+  developer policy = explicit scoped coding only
   runtime permissions = inherited from parent
   |
   | OpenAI Responses API
@@ -113,12 +116,20 @@ standalone child agent TOML
   | OpenAI-compatible Chat Completions
   v
 https://opencode.ai/zen/go/v1/chat/completions
+
+V4 child 产出限定范围 diff
+  |
+  v
+预选 GPT parent / read-only gpt_review_worker
+  code review + final verification + Git integration
 ```
 
 ### 新仓库只保留这些模块
 
-- `agents/opencode-go-flash-worker.toml`
-- `skills/use-opencode-go-flash-worker/`
+- `agents/v4-flash-worker.toml`
+- `agents/gpt-review-worker.toml`（不固定 model/provider，继承 GPT parent）
+- per-child model catalog（只为 V4 启用原生 freeform apply_patch；不承载 GPT 审批或 review）
+- `skills/use-v4-flash-worker/`
 - `hooks/plaintext_handoff.py` 及其 POSIX 协议测试
 - `bridge/`：Responses↔Chat 的纯协议适配、SSE、tool calls、tool-result continuation、短期 state、`/health`
 - `scripts/install.py`：幂等安装、备份/回滚、Hook 合并、静态检查
@@ -126,7 +137,7 @@ https://opencode.ai/zen/go/v1/chat/completions
 - `tests/`：handoff 协议、转换 fixtures、SSE、工具续轮、安装等价性
 - `prompts/quick-smoke-test.md`：一次最小付费 native child 测试
 
-明确不做：修改顶层 `model` / `model_provider`、自定义全局 model catalog、关闭整个 session 的 V2、fallback 到其他模型、GPT passthrough、MCP、另一个 Codex CLI、MissionV1、自动写工作区，或虚假宣称 child role 能独立强制只读。
+明确不做：修改顶层 `model` / `model_provider`、自定义全局 model catalog、关闭整个 session 的 V2、fallback 到其他模型、通过 bridge 转发 GPT、MCP、另一个 Codex CLI、MissionV1、把复杂工作交给 V4、无 assignment 授权的写入、自动 worktree，或虚假宣称 child role 能独立强制权限边界。
 
 ### 凭据边界
 
@@ -156,14 +167,14 @@ https://opencode.ai/zen/go/v1/chat/completions
 2. plaintext handoff 的 collision、原子发布、精确 role、一次消费、replay 拒绝、TTL/损坏恢复、并发 at-most-once 测试通过。
 3. bridge fixtures 证明 Responses input、function tools、tool call delta、tool result continuation、SSE terminal event 和 usage 转换。
 4. bridge `doctor` 证明请求实际映射到 `deepseek-v4-flash`，且 GPT-family 请求 fail closed。
-5. 一次显式授权的小额 live smoke：OpenAI parent 原生 spawn 指定 child，child 收到随机 marker、完成一个无写入工具调用并通过 native callback 返回；同时回查 child thread 的 provider/model 与实际 permission profile 元数据。
+5. 显式授权的小额 live smoke：预选 GPT parent 原生 spawn 指定 V4 child，先完成只读路由检查，再在临时 Git 仓库内只修改一个授权文件、运行测试并通过 native callback 返回；GPT reviewer 审查精确 diff，同时回查 V4 provider/model、GPT reviewer provider/model 与实际 permission profile 元数据。
 6. cancel 与超时均明确失败；bridge 重启后只从私有 SQLite 恢复已提交的 continuation state，缺失状态时明确失败，不静默换模型、直连 API 或继承 parent 历史。
 
 ## 最终决策
 
 **建新仓库。** 可以把它理解为“Utopia-V control plane + 精简 opencode-bridge transport”，而不是第三个大而全的 agent runtime。
 
-开发顺序建议：先做单模型、behaviorally no-write、macOS/POSIX 主链并跑 live smoke；再补 Windows；最后才考虑写任务或更多 OpenCode Go 模型。首版不要加入 runtime fallback，失败应明确暴露在 assignment、bridge、provider 或 callback 的具体边界。
+开发顺序建议：先做“简单任务走 V4、复杂/规划/review 走预选 GPT”的条件路由、显式范围内写入、macOS/POSIX 主链并跑 live smoke；再补 Windows；最后才考虑自动 worktree或更多 OpenCode Go 模型。首版不要加入 runtime fallback，失败应明确暴露在 assignment、bridge、provider、reviewer 或 callback 的具体边界。
 
 ## 上游快照
 

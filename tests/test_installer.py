@@ -68,8 +68,27 @@ class InstallerTests(unittest.TestCase):
             / "codex-opencode-go-service"
         ).resolve()
         self.assertIn(f'command = "{expected_service}"', agent)
+        model_catalog = (
+            self.codex_home
+            / "opencode-go-subagent"
+            / "deepseek-v4-flash-models.json"
+        ).resolve()
+        self.assertTrue(model_catalog.is_file())
+        self.assertIn(f'model_catalog_json = "{model_catalog}"', agent)
+        model = json.loads(model_catalog.read_text())["models"][0]
+        self.assertEqual(model["slug"], "deepseek-v4-flash")
+        self.assertEqual(model["apply_patch_tool_type"], "freeform")
+        self.assertIsNone(model["auto_review_model_override"])
         self.assertNotIn("sandbox_mode", agent)
         self.assertIn("reapply the parent turn's runtime permission profile", agent)
+
+        reviewer = (self.codex_home / "agents" / "gpt-review-worker.toml").read_text()
+        self.assertIn('name = "gpt_review_worker"', reviewer)
+        self.assertIn('sandbox_mode = "read-only"', reviewer)
+        self.assertIn("inherits the GPT model selected by the user", reviewer)
+        self.assertNotIn("model_provider =", reviewer)
+        self.assertNotIn("model =", reviewer)
+        self.assertNotIn("opencode_go_bridge", reviewer)
 
         runtime = (
             self.codex_home
@@ -111,6 +130,40 @@ class InstallerTests(unittest.TestCase):
         agents_text = (self.codex_home / "AGENTS.md").read_text()
         self.assertTrue(agents_text.startswith("existing instructions\n"))
         self.assertEqual(agents_text.count("codex-opencode-go-subagent:start"), 1)
+
+    def test_installed_policy_allows_only_explicitly_scoped_coding(self):
+        install(self.repo_root, self.codex_home)
+
+        agent = (self.codex_home / "agents" / "v4-flash-worker.toml").read_text()
+        skill = (
+            self.codex_home
+            / "skills"
+            / "use-v4-flash-worker"
+            / "SKILL.md"
+        ).read_text()
+        agents = (self.codex_home / "AGENTS.md").read_text()
+
+        self.assertIn("explicitly authorizes a coding task", agent)
+        self.assertIn("simple, bounded work", agent)
+        self.assertIn("ESCALATE_TO_GPT", agent)
+        self.assertIn("writable scope", agent)
+        self.assertIn("Never commit, push, create pull requests", agent)
+        self.assertNotIn("Never modify files or external state", agent)
+        self.assertNotIn("WRITE_SCOPE_UNSUPPORTED", agent)
+
+        self.assertIn("simple, bounded, mechanically verifiable coding", skill)
+        self.assertIn("explicit writable scope", skill)
+        self.assertIn("validation commands", skill)
+        self.assertIn("preselected", skill)
+        self.assertIn("GPT parent", skill)
+        self.assertIn("ESCALATE_TO_GPT", skill)
+
+        self.assertIn("simple, bounded, mechanically verifiable coding", agents)
+        self.assertIn("explicit writable scope", agents)
+        self.assertIn("final verification", agents)
+        self.assertIn("Git operations", agents)
+        self.assertIn("preselected GPT parent", agents)
+        self.assertIn("gpt_review_worker", agents)
 
     def test_uninstall_removes_only_managed_files_and_hook(self):
         install(self.repo_root, self.codex_home)

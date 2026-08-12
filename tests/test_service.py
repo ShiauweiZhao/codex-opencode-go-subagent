@@ -254,6 +254,236 @@ class BridgeServiceTests(unittest.TestCase):
             "continued",
         )
 
+    def test_continues_latest_tool_group_when_codex_resends_full_history(self):
+        first = FakeUpstream(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_a",
+                                    "type": "function",
+                                    "function": {"name": "exec", "arguments": "{}"},
+                                },
+                                {
+                                    "id": "call_b",
+                                    "type": "function",
+                                    "function": {"name": "exec", "arguments": "{}"},
+                                },
+                            ],
+                        }
+                    }
+                ]
+            }
+        )
+        service = BridgeService(self.config, self.store, first)
+        initial_message = {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "inspect"}],
+        }
+        status, _, _ = service.respond(
+            {"model": "deepseek-v4-flash", "input": [initial_message]},
+            authorization="Bearer local-secret",
+        )
+        self.assertEqual(status, 200)
+
+        first_history = [
+            initial_message,
+            {"type": "reasoning"},
+            {"type": "function_call", "call_id": "call_a", "name": "exec"},
+            {"type": "function_call", "call_id": "call_b", "name": "exec"},
+            {"type": "function_call_output", "call_id": "call_a", "output": "a"},
+            {"type": "function_call_output", "call_id": "call_b", "output": "b"},
+        ]
+        second = FakeUpstream(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_c",
+                                    "type": "function",
+                                    "function": {"name": "exec", "arguments": "{}"},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        )
+        service.upstream = second
+        status, _, _ = service.respond(
+            {"model": "deepseek-v4-flash", "input": first_history},
+            authorization="Bearer local-secret",
+        )
+        self.assertEqual(status, 200)
+
+        third = FakeUpstream({"choices": [{"message": {"content": "done"}}]})
+        service.upstream = third
+        status, _, data = service.respond(
+            {
+                "model": "deepseek-v4-flash",
+                "input": first_history
+                + [
+                    {"type": "reasoning"},
+                    {
+                        "type": "function_call",
+                        "call_id": "call_c",
+                        "name": "exec",
+                    },
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call_c",
+                        "output": "c",
+                    },
+                ],
+            },
+            authorization="Bearer local-secret",
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(third.requests[0]["messages"][-1]["tool_call_id"], "call_c")
+        self.assertEqual(
+            sum(
+                message.get("role") == "user" and message.get("content") == "inspect"
+                for message in third.requests[0]["messages"]
+            ),
+            1,
+        )
+        self.assertEqual(
+            self._completed_response(data)["output"][0]["content"][0]["text"],
+            "done",
+        )
+
+    def test_continues_latest_custom_tool_group_when_codex_resends_full_history(self):
+        first = FakeUpstream(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_patch",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "apply_patch",
+                                        "arguments": '{"patch":"*** Begin Patch\\n*** End Patch"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        )
+        service = BridgeService(self.config, self.store, first)
+        initial_message = {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "implement"}],
+        }
+        tools = [
+            {
+                "type": "custom",
+                "name": "apply_patch",
+                "description": "Apply a patch.",
+            }
+        ]
+        status, _, _ = service.respond(
+            {"model": "deepseek-v4-flash", "input": [initial_message], "tools": tools},
+            authorization="Bearer local-secret",
+        )
+        self.assertEqual(status, 200)
+
+        final = FakeUpstream({"choices": [{"message": {"content": "done"}}]})
+        service.upstream = final
+        status, _, data = service.respond(
+            {
+                "model": "deepseek-v4-flash",
+                "input": [
+                    initial_message,
+                    {
+                        "type": "custom_tool_call",
+                        "call_id": "call_patch",
+                        "name": "apply_patch",
+                        "input": "*** Begin Patch\n*** End Patch",
+                    },
+                    {
+                        "type": "custom_tool_call_output",
+                        "call_id": "call_patch",
+                        "output": "Done!",
+                    },
+                ],
+            },
+            authorization="Bearer local-secret",
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(final.requests[0]["messages"][-1]["tool_call_id"], "call_patch")
+        self.assertEqual(
+            self._completed_response(data)["output"][0]["content"][0]["text"],
+            "done",
+        )
+
+    def test_does_not_replay_an_older_output_for_an_unfinished_latest_call(self):
+        first = FakeUpstream(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_old",
+                                    "type": "function",
+                                    "function": {"name": "exec", "arguments": "{}"},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        )
+        service = BridgeService(self.config, self.store, first)
+        initial_message = {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "inspect"}],
+        }
+        status, _, _ = service.respond(
+            {"model": "deepseek-v4-flash", "input": [initial_message]},
+            authorization="Bearer local-secret",
+        )
+        self.assertEqual(status, 200)
+
+        should_not_run = FakeUpstream({"choices": [{"message": {"content": "wrong"}}]})
+        service.upstream = should_not_run
+        status, _, _ = service.respond(
+            {
+                "model": "deepseek-v4-flash",
+                "input": [
+                    initial_message,
+                    {"type": "function_call", "call_id": "call_old", "name": "exec"},
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call_old",
+                        "output": "old",
+                    },
+                    {"type": "function_call", "call_id": "call_new", "name": "exec"},
+                ],
+            },
+            authorization="Bearer local-secret",
+        )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(should_not_run.requests, [])
+
     @staticmethod
     def _completed_response(data):
         for line in data.decode().splitlines():

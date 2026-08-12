@@ -32,6 +32,7 @@ class ProtocolError(ValueError):
 class ProtocolContext:
     messages: list[JSON]
     reverse_tool_names: dict[str, str]
+    tool_types: dict[str, str]
     tools: list[JSON]
 
 
@@ -92,11 +93,12 @@ def _sanitize_tool_name(name: str, used: set[str]) -> str:
     return candidate
 
 
-def _convert_tools(tools: Any) -> tuple[list[JSON], dict[str, str]]:
+def _convert_tools(tools: Any) -> tuple[list[JSON], dict[str, str], dict[str, str]]:
     if not isinstance(tools, list):
-        return [], {}
+        return [], {}, {}
     converted: list[JSON] = []
     reverse: dict[str, str] = {}
+    tool_types: dict[str, str] = {}
     used: set[str] = set()
     for tool in tools:
         if not isinstance(tool, dict):
@@ -114,15 +116,33 @@ def _convert_tools(tools: Any) -> tuple[list[JSON], dict[str, str]]:
                 "description": tool.get("description", ""),
                 "parameters": tool.get("parameters") or {"type": "object", "properties": {}},
             }
+        elif typ == "custom" and tool.get("name") == "apply_patch":
+            original = "apply_patch"
+            function = {
+                "name": original,
+                "description": tool.get("description", "Apply a patch inside the writable workspace."),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "patch": {
+                            "type": "string",
+                            "description": "The complete apply_patch payload, including Begin Patch and End Patch markers.",
+                        }
+                    },
+                    "required": ["patch"],
+                    "additionalProperties": False,
+                },
+            }
         else:
             continue
         safe = _sanitize_tool_name(original, used)
         reverse[safe] = original
+        tool_types[safe] = str(typ)
         function["name"] = safe
         function.setdefault("description", "")
         function.setdefault("parameters", {"type": "object", "properties": {}})
         converted.append({"type": "function", "function": function})
-    return converted, reverse
+    return converted, reverse, tool_types
 
 
 def _request_items(value: Any) -> tuple[list[JSON], list[JSON]]:
@@ -138,7 +158,7 @@ def _request_items(value: Any) -> tuple[list[JSON], list[JSON]]:
         if not isinstance(item, dict):
             continue
         typ = item.get("type")
-        if typ == "function_call_output":
+        if typ in {"function_call_output", "custom_tool_call_output"}:
             call_id = str(item.get("call_id") or "")
             if not call_id:
                 raise ProtocolError("function_call_output is missing call_id")
@@ -185,11 +205,14 @@ def build_chat_request(body: JSON, previous: JSON | None = None) -> tuple[JSON, 
     if not messages:
         messages.append({"role": "user", "content": ""})
 
-    converted_tools, reverse = _convert_tools(body.get("tools"))
+    converted_tools, reverse, tool_types = _convert_tools(body.get("tools"))
     if previous:
         inherited_reverse = dict(previous.get("reverse_tool_names") or {})
         inherited_reverse.update(reverse)
         reverse = inherited_reverse
+        inherited_types = dict(previous.get("tool_types") or {})
+        inherited_types.update(tool_types)
+        tool_types = inherited_types
         if not converted_tools:
             converted_tools = list(previous.get("tools") or [])
     payload: JSON = {"model": model, "messages": messages, "stream": False}
@@ -208,6 +231,7 @@ def build_chat_request(body: JSON, previous: JSON | None = None) -> tuple[JSON, 
     return payload, ProtocolContext(
         messages=messages,
         reverse_tool_names=reverse,
+        tool_types=tool_types,
         tools=converted_tools,
     )
 
@@ -259,16 +283,35 @@ def build_responses_result(
             }
         )
         pending.append(call_id)
-        output.append(
-            {
-                "type": "function_call",
-                "id": _new_id("fc"),
-                "call_id": call_id,
-                "name": original_name,
-                "arguments": arguments,
-                "status": "completed",
-            }
-        )
+        if context.tool_types.get(raw_name) == "custom":
+            try:
+                custom_arguments = json.loads(arguments)
+            except json.JSONDecodeError as error:
+                raise ProtocolError("apply_patch tool call arguments must be valid JSON") from error
+            patch = custom_arguments.get("patch") if isinstance(custom_arguments, dict) else None
+            if not isinstance(patch, str):
+                raise ProtocolError("apply_patch tool call is missing string patch")
+            output.append(
+                {
+                    "type": "custom_tool_call",
+                    "id": _new_id("ctc"),
+                    "call_id": call_id,
+                    "name": original_name,
+                    "input": patch,
+                    "status": "completed",
+                }
+            )
+        else:
+            output.append(
+                {
+                    "type": "function_call",
+                    "id": _new_id("fc"),
+                    "call_id": call_id,
+                    "name": original_name,
+                    "arguments": arguments,
+                    "status": "completed",
+                }
+            )
     if replay_calls:
         assistant["tool_calls"] = replay_calls
     elif content:
@@ -312,6 +355,7 @@ def build_responses_result(
         "messages": context.messages + [assistant],
         "pending_call_ids": pending,
         "reverse_tool_names": context.reverse_tool_names,
+        "tool_types": context.tool_types,
         "tools": context.tools,
     }
     return result, state
@@ -403,6 +447,27 @@ def _output_events(
                 "output_index": index,
                 "item_id": item["id"],
                 "arguments": arguments,
+            },
+        )
+    elif typ == "custom_tool_call":
+        tool_input = _text(item.get("input"))
+        if tool_input:
+            yield emit(
+                "response.custom_tool_call_input.delta",
+                {
+                    "response_id": response_id,
+                    "output_index": index,
+                    "item_id": item["id"],
+                    "delta": tool_input,
+                },
+            )
+        yield emit(
+            "response.custom_tool_call_input.done",
+            {
+                "response_id": response_id,
+                "output_index": index,
+                "item_id": item["id"],
+                "input": tool_input,
             },
         )
     yield emit(

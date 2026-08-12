@@ -1,0 +1,46 @@
+{
+  "models": [
+    {
+      "slug": "deepseek-v4-flash",
+      "display_name": "DeepSeek V4 Flash",
+      "description": "OpenCode Go DeepSeek V4 Flash worker",
+      "base_instructions": "You are a coding agent. Follow developer instructions, use tools precisely, and stay within the authorized scope.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast bounded work"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced implementation work"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper repository reasoning"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "priority": 0,
+      "supported_in_api": true,
+      "support_verbosity": false,
+      "apply_patch_tool_type": "freeform",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "input_modalities": [
+        "text"
+      ],
+      "supports_parallel_tool_calls": false,
+      "supports_image_detail_original": false,
+      "context_window": 1000000,
+      "max_context_window": 1000000,
+      "experimental_supported_tools": [],
+      "auto_review_model_override": null,
+      "tool_mode": "direct",
+      "multi_agent_version": "v1"
+    }
+  ]
+}

@@ -28,10 +28,25 @@ Responses tool continuation state 默认保存在：
 plaintext Hook 的 pending assignment 也会短暂保存在当前用户 state 目录中，并在一次
 成功交付后消费。它解决跨 provider 任务正文交付问题，不是机密通道。
 
+## Workspace mutation
+
+- V4 只接受简单、边界清晰、可机械验收的工作；规划、复杂实现、代码 review 和最终
+  判断由用户预选的 GPT 负责。发现歧义或复杂度时 V4 必须停止并回交。
+- V4 分析 assignment 默认不授权写入；`gpt_review_worker` 始终只读。
+- 编码 assignment 必须列出 explicit writable scope 和 validation commands。
+- child 继承 parent 的 runtime permission profile；技术上可写不代表任务已授权。
+- child 不得 commit、push、创建 PR、修改凭据或操作外部系统；parent 独立检查 diff、
+  运行最终验证并负责 Git 集成。
+- 需要更强隔离时，由 parent 先创建独立 worktree；本仓库不会暗中扩大 sandbox。
+
 ## Network boundary
 
 - bridge 只允许绑定 `127.0.0.1`、`::1` 或 `localhost`。
 - GPT-family 或其他模型 ID 会 fail closed，不会转发给 OpenCode Go。
+- Codex Auto-review 是 sandbox 边界审批，不是代码 review。V4 child 不应发起需要提权的
+  动作；遇到边界必须 `ESCALATE_TO_GPT`。代码 review 由主 GPT 或其只读
+  `gpt_review_worker` 完成。
+- bridge 仍只接受 `deepseek-v4-flash`，不提供 GPT 或 `codex-auto-review` passthrough。
 - 不存在运行时 fallback。
 - `/healthz` 与 `/v1/models` 不调用上游，也不返回凭据；`/v1/responses` 必须携带本地 bearer。
 - macOS LaunchAgent plist 不含凭据，并在非正常退出后由 `launchd` 自动重启。

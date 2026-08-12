@@ -11,6 +11,19 @@ from codex_opencode_go_bridge.protocol import (
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_rejects_codex_auto_review_instead_of_sending_it_to_deepseek(self):
+        with self.assertRaisesRegex(ProtocolError, "unsupported model"):
+            build_chat_request(
+                {
+                    "model": "codex-auto-review",
+                    "input": "Review one requested tool call.",
+                }
+            )
+
+    def test_rejects_every_other_model_instead_of_falling_back(self):
+        with self.assertRaisesRegex(ProtocolError, "unsupported model"):
+            build_chat_request({"model": "gpt-5.6-sol", "input": "Do not proxy review."})
+
     def test_build_chat_request_maps_instructions_input_and_tools(self):
         body = {
             "model": "deepseek-v4-flash",
@@ -52,6 +65,102 @@ class ProtocolTests(unittest.TestCase):
         self.assertFalse(payload["stream"])
         for unsupported in ("parallel_tool_calls", "reasoning", "store", "tool_choice"):
             self.assertNotIn(unsupported, payload)
+
+    def test_build_chat_request_maps_apply_patch_custom_tool_to_upstream_function(self):
+        body = {
+            "model": "deepseek-v4-flash",
+            "input": "Implement the requested change.",
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "apply_patch",
+                    "description": "Apply a patch to files in the writable workspace.",
+                    "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/s"},
+                }
+            ],
+        }
+
+        payload, context = build_chat_request(body)
+
+        tool = payload["tools"][0]["function"]
+        self.assertEqual(tool["name"], "apply_patch")
+        self.assertEqual(tool["parameters"]["required"], ["patch"])
+        self.assertEqual(context.tool_types, {"apply_patch": "custom"})
+
+    def test_build_chat_request_drops_unknown_custom_tools(self):
+        payload, _ = build_chat_request(
+            {
+                "model": "deepseek-v4-flash",
+                "input": "Do not expose arbitrary custom tools.",
+                "tools": [{"type": "custom", "name": "dangerous_writer"}],
+            }
+        )
+
+        self.assertNotIn("tools", payload)
+
+    def test_build_responses_result_maps_apply_patch_back_to_custom_tool_call(self):
+        body = {
+            "model": "deepseek-v4-flash",
+            "input": "Implement the requested change.",
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "apply_patch",
+                    "description": "Apply a patch.",
+                }
+            ],
+        }
+        _, context = build_chat_request(body)
+
+        result, state = build_responses_result(
+            body,
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_patch",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "apply_patch",
+                                        "arguments": json.dumps(
+                                            {"patch": "*** Begin Patch\n*** End Patch"}
+                                        ),
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+            context,
+            response_id="resp_patch",
+            created_at=123,
+        )
+
+        call = result["output"][0]
+        self.assertEqual(call["type"], "custom_tool_call")
+        self.assertEqual(call["name"], "apply_patch")
+        self.assertEqual(call["input"], "*** Begin Patch\n*** End Patch")
+        self.assertEqual(state["tool_types"], {"apply_patch": "custom"})
+
+        continuation, _ = build_chat_request(
+            {
+                "model": "deepseek-v4-flash",
+                "previous_response_id": "resp_patch",
+                "input": [
+                    {
+                        "type": "custom_tool_call_output",
+                        "call_id": "call_patch",
+                        "output": "Done!",
+                    }
+                ],
+            },
+            previous=state,
+        )
+        self.assertEqual(continuation["messages"][-1]["tool_call_id"], "call_patch")
 
     def test_build_chat_request_continues_a_tool_call_and_preserves_reasoning(self):
         previous = {
