@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "codex-opencode-go-subagent"
 version = "0.1.0"
-description = "Use OpenCode Go DeepSeek V4 Flash as a native Codex worker for bounded coding and extraction"
+description = "Use OpenCode Go DeepSeek V4 Flash as the default Codex code-implementation worker, with GPT owning requirements, design, review, final verification, integration, and Git"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "Apache-2.0"}

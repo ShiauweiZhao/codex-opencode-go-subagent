@@ -36,11 +36,19 @@ state 目录。client 禁用系统代理与 HTTP 重定向；endpoint 不调用 
 
 ## Workspace mutation
 
-- V4 只接受简单、边界清晰、可机械验收的实现或纯提取/枚举；分析、审计、评估、
-  接入点梳理、测试缺口发现、规划、复杂实现、代码 review 和最终判断由用户预选的
-  GPT 负责。只读任务也不能据此自动交给 V4；发现推理判断、歧义或复杂度时必须回交。
+- V4 Flash 默认负责代码实现（code implementation）：功能、修复、重构、测试、
+  代码相关文档，以及 GPT 已解析接口/行为后的跨模块接线；纯提取/枚举也可交给
+  V4。复杂、多文件、跨模块本身不是拒绝 V4 的理由。需求、分析、设计、架构、拆解、
+  审查、最终验证、集成和 Git 由用户预选的 GPT 负责。
 - `gpt_review_worker` 始终只读并继承用户预选的 GPT 模型。
 - 编码 assignment 必须列出 explicit writable scope 和 validation commands。
+- 并发策略：当开发工作可以拆成独立（independent）、无冲突（non-conflicting）、
+  无相互依赖（dependency-free）的 writable scopes 时，GPT parent 应主动并行启动
+  多个 V4 workers；只有批次之间存在依赖或修改同一文件时才顺序执行。
+- V4 不做架构选择、审查、最终验收、Git/PR、密钥/权限升级或 provider fallback；
+  bridge/provider 失败时 fail closed。V4 只在未解决设计选择、需要扩大 scope、
+  安全/后果性判断、缺失 scope/oracle 或 approval boundary 时返回
+  `ESCALATE_TO_GPT`；GPT 解决后尽可能把剩余编码重新交给 V4。
 - child 继承 parent 的 runtime permission profile；技术上可写不代表任务已授权。
 - child 不得 commit、push、创建 PR、修改凭据或操作外部系统；parent 独立检查 diff、
   运行最终验证并负责 Git 集成。

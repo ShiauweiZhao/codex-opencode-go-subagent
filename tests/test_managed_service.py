@@ -453,6 +453,7 @@ class ServiceEntryPointTests(unittest.TestCase):
                 if self.path == "/stage":
                     self.send_response(302)
                     self.send_header("Location", "/sink")
+                    self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
                 self.sink_authorizations.append(self.headers.get("Authorization"))
@@ -519,6 +520,49 @@ class ServiceEntryPointTests(unittest.TestCase):
         self.assertNotIn(assignment, str(caught.exception))
         self.assertNotIn(token, str(caught.exception))
         self.assertIn("[REDACTED]", str(caught.exception))
+
+    def test_local_handoff_survives_reset_while_reading_error_body(self):
+        assignment = "sensitive assignment text"
+        token = "local-secret"
+
+        class ResettingBody:
+            def __init__(self):
+                self.close_calls = 0
+
+            def read(self, size=-1):
+                raise ConnectionResetError("connection reset by peer")
+
+            def close(self):
+                self.close_calls += 1
+
+        body = ResettingBody()
+        error = managed_service_module.urllib.error.HTTPError(
+            managed_service_module.HANDOFF_STAGE_URL,
+            302,
+            "Found",
+            {},
+            body,
+        )
+
+        class FailingOpener:
+            def open(self, request, timeout):
+                raise error
+
+        with patch.object(
+            managed_service_module,
+            "_local_only_opener",
+            return_value=FailingOpener(),
+        ):
+            with self.assertRaises(RuntimeError) as caught:
+                managed_service_module._send_handoff_to_local_bridge(
+                    assignment,
+                    token,
+                )
+
+        self.assertIn("HTTP 302", str(caught.exception))
+        self.assertNotIn(assignment, str(caught.exception))
+        self.assertNotIn(token, str(caught.exception))
+        self.assertEqual(body.close_calls, 1)
 
     def test_print_bridge_token_never_prints_the_upstream_key(self):
         keychain = FakeKeychain()

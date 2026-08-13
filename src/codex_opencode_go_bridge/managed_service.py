@@ -485,7 +485,10 @@ def _send_handoff_to_local_bridge(assignment: str, token: str) -> dict[str, obje
             raw = response.read(64 * 1024 + 1)
     except urllib.error.HTTPError as error:
         try:
-            raw = error.read(64 * 1024)
+            try:
+                raw = error.read(64 * 1024)
+            except OSError:
+                raw = b""
         finally:
             error.close()
         message = _safe_local_error(raw) or f"local handoff service returned HTTP {error.code}"

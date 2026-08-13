@@ -1,15 +1,27 @@
 # Repository instructions
 
 - Keep the parent Codex model/provider and ChatGPT login unchanged.
-- Route only simple, bounded, mechanically verifiable coding and pure literal
-  lookup, extraction, or enumeration to `v4_flash_worker`. Coding requires an
-  explicit writable scope and validation commands. If inference, ambiguity, or
-  complexity appears, stop and return the task to the preselected GPT parent.
-- Analysis, audit, assessment, design, planning, architecture, integration-point
-  mapping, test-gap discovery, consequential judgment, complex implementation,
-  code review, final verification, Git operations, and integration stay with the
-  preselected GPT parent. It may spawn `gpt_review_worker`, which inherits that
-  GPT model and is read-only.
+- Code implementation defaults to `v4_flash_worker`: features, bug fixes,
+  refactors, tests, code-related documentation, and cross-module wiring after
+  interfaces and behavior are resolved. Multi-file or cross-module complexity is
+  not by itself a reason to refuse V4; the preselected GPT parent first resolves
+  design ambiguity and decomposes the work into one or more bounded coding
+  assignments, each with an explicit writable scope and validation commands.
+- Requirements clarification, analysis, audit, assessment, design, planning,
+  architecture, interface and behavior decisions, task decomposition,
+  integration-point mapping, test-gap discovery, consequential judgment, code
+  review, final verification, integration decisions, and Git operations stay
+  with the preselected GPT parent. It may spawn read-only `gpt_review_worker`,
+  which inherits that GPT model.
+- When development work can be split into independent, non-conflicting,
+  dependency-free writable scopes, start multiple V4 workers in parallel;
+  fall back to sequential execution only when batches share dependencies or
+  edit the same files.
+- The V4 worker returns `ESCALATE_TO_GPT` only for unresolved design choices,
+  required scope expansion, safety or consequential judgment, a missing writable
+  scope or validation oracle, or sandbox/approval boundaries. After the GPT
+  parent resolves the boundary, hand the remaining implementation back to V4
+  where feasible.
 - Any sandbox or approval-boundary action stays with the GPT parent. The V4 child
   must stop with `ESCALATE_TO_GPT` instead of requesting escalation.
 - Current Codex reapplies the parent runtime permission profile after role loading;

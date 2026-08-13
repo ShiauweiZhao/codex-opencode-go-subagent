@@ -1,4 +1,4 @@
 interface:
   display_name: "Use V4 Flash Worker"
-  short_description: "One-shot native handoff to DeepSeek Flash"
-  default_prompt: "Use $use-v4-flash-worker to delegate this bounded task through the installed plaintext Hook."
+  short_description: "Default code implementation worker with explicit writable scope and validation; GPT keeps analysis, audit, design, review, final verification, and Git"
+  default_prompt: "Use $use-v4-flash-worker to delegate this implementation batch; the worker returns ESCALATE_TO_GPT for unresolved design choices or a missing validation oracle."

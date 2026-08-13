@@ -7,21 +7,33 @@ description: Use the OpenCode Go backed v4_flash_worker through the installed on
 
 ## Choose the worker
 
-- Use it only for simple, bounded, mechanically verifiable coding or pure
-  extraction, literal lookup, and enumeration with no inference or judgment.
-- Keep analysis, audit, assessment, design, planning, architecture, integration-
-  point mapping, test-gap discovery, ambiguous or cross-cutting implementation,
-  consequential judgment, code review, and final validation on the preselected
-  GPT parent. The parent may spawn `gpt_review_worker`, which inherits that GPT
+- Code implementation defaults to `v4_flash_worker`: features, bug fixes,
+  refactors, tests, code-related documentation, and cross-module wiring after
+  the parent has resolved interfaces and behavior. Multi-file or cross-module
+  complexity is not by itself a reason to refuse V4.
+- Keep requirements clarification, analysis, audit, assessment, design,
+  planning, architecture, interface and behavior decisions, task decomposition,
+  integration-point mapping, test-gap discovery, consequential judgment, code
+  review, final verification, and final validation on the preselected GPT
+  parent. The parent may spawn `gpt_review_worker`, which inherits that GPT
   model and stays read-only.
-- Never send an analysis or audit assignment to V4. A read-only task is not
-  automatically simple: if it asks what should change, why, what is missing, or
-  what risks exist, it belongs to GPT.
+- The GPT parent resolves design ambiguity first and decomposes the work into
+  one or more bounded coding assignments; V4 then implements each batch.
+  Never send an analysis or audit assignment to V4. A read-only task is not
+  automatically a V4 job: if it asks what should change, why, what is missing,
+  or what risks exist, it belongs to GPT.
 - Assign coding only with an explicit writable scope and concrete validation
-  commands. Cross-module wiring belongs to GPT until GPT has reduced it to one
-  mechanical implementation job with resolved interfaces and an objective oracle.
+  commands. Start multiple V4 workers in parallel when the work splits into
+  independent, non-conflicting, dependency-free writable scopes; execute
+  sequentially only when batches share dependencies or edit the same files.
 - Keep consequential decisions, final diff review, independent verification,
-  Git operations, and integration in the parent.
+  Git operations, and integration in the parent. The worker never commits,
+  pushes, creates pull requests, or mutates external systems.
+- The worker returns `ESCALATE_TO_GPT` only for unresolved design choices,
+  required scope expansion, safety or consequential judgment, a missing writable
+  scope or validation oracle, or sandbox/approval boundaries. After the parent
+  resolves the boundary, hand the remaining implementation back to V4 where
+  feasible.
 - Native children currently inherit the parent turn's runtime permission
   profile after role loading. Permission to write is bounded by both that
   profile and the assignment; neither one expands the other.
@@ -93,9 +105,9 @@ description: Use the OpenCode Go backed v4_flash_worker through the installed on
 - An assignment labeled analysis, audit, assessment, design, planning,
   integration mapping, or test-gap discovery is not a V4 job even when it is
   read-only. Keep it on the preselected GPT parent.
-- If a simple assignment reveals ambiguity, broad impact, architectural choices,
-  or security-sensitive judgment, stop with `ESCALATE_TO_GPT`; do not expand the
-  assignment or continue coding.
+- If an assignment still needs a design choice, scope expansion, safety or
+  consequential judgment, or lacks a writable scope or validation oracle, stop
+  with `ESCALATE_TO_GPT`; do not expand the assignment or continue coding.
 - Reject coding evidence that relies only on callback claims: writes must be
   verifiable from the rollout JSONL and the bridge SQLite response chain through
   the structured `apply_patch` tool, never from model-constructed `exec_command`
