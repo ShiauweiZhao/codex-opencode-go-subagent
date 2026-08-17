@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use OpenCode Go V4 Worker"
+  short_description: "Default code implementation worker with explicit writable scope and validation; GPT keeps analysis, audit, design, review, final verification, and Git"
+  default_prompt: "Use $use-opencode-go-v4-worker to delegate this implementation batch; the worker returns ESCALATE_TO_GPT for unresolved design choices or a missing validation oracle."

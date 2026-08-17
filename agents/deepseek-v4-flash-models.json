@@ -5,19 +5,19 @@
       "display_name": "DeepSeek V4 Flash",
       "description": "OpenCode Go DeepSeek V4 Flash worker",
       "base_instructions": "You are a coding agent. Follow developer instructions, use tools precisely, and stay within the authorized scope.",
-      "default_reasoning_level": "medium",
+      "default_reasoning_level": "max",
       "supported_reasoning_levels": [
         {
           "effort": "low",
           "description": "Fast bounded work"
         },
         {
-          "effort": "medium",
-          "description": "Balanced implementation work"
-        },
-        {
           "effort": "high",
           "description": "Deeper repository reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum-depth repository reasoning"
         }
       ],
       "shell_type": "shell_command",

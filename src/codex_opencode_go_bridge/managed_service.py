@@ -23,7 +23,7 @@ LAUNCH_AGENT_LABEL = KEYCHAIN_SERVICE
 UPSTREAM_ACCOUNT = "upstream-api-key"
 BRIDGE_ACCOUNT = "bridge-token"
 _MISSING = object()
-HANDOFF_STAGE_URL = "http://127.0.0.1:4141/internal/handoffs/v4_flash_worker/stage"
+HANDOFF_STAGE_URL = "http://127.0.0.1:4141/internal/handoffs/opencode_go_v4_worker/stage"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -448,7 +448,7 @@ class ManagedBridgeService:
         if (
             not isinstance(result, dict)
             or result.get("staged") is not True
-            or result.get("agent_type") != "v4_flash_worker"
+            or result.get("agent_type") != "opencode_go_v4_worker"
         ):
             raise RuntimeError("managed handoff staging returned an invalid result")
         return result

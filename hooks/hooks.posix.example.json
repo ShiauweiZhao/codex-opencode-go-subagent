@@ -1,9 +1,9 @@
 {
-  "description": "One-shot plaintext task handoff for the OpenCode Go backed v4_flash_worker.",
+  "description": "One-shot plaintext task handoff for the OpenCode Go backed opencode_go_v4_worker.",
   "hooks": {
     "SubagentStart": [
       {
-        "matcher": "^v4_flash_worker$",
+        "matcher": "^opencode_go_v4_worker$",
         "hooks": [
           {
             "type": "command",

@@ -29,7 +29,7 @@ class FakeHandoffStager:
         return {
             "staged": True,
             "handoff_id": "12345678-1234-5678-1234-567812345678",
-            "agent_type": "v4_flash_worker",
+            "agent_type": "opencode_go_v4_worker",
             "expires_at": "2026-08-12T02:00:00+00:00",
         }
 
@@ -101,7 +101,7 @@ class HTTPServerTests(unittest.TestCase):
         assignment = "bounded coding assignment\nmarker=managed-stage"
         payload = json.dumps({"assignment": assignment}).encode()
         unauthorized = urllib.request.Request(
-            f"{self.base}/internal/handoffs/v4_flash_worker/stage",
+            f"{self.base}/internal/handoffs/opencode_go_v4_worker/stage",
             data=payload,
             headers={"Content-Type": "application/json"},
         )
@@ -111,7 +111,7 @@ class HTTPServerTests(unittest.TestCase):
         caught.exception.close()
 
         authorized = urllib.request.Request(
-            f"{self.base}/internal/handoffs/v4_flash_worker/stage",
+            f"{self.base}/internal/handoffs/opencode_go_v4_worker/stage",
             data=payload,
             headers={
                 "Content-Type": "application/json",
@@ -122,7 +122,7 @@ class HTTPServerTests(unittest.TestCase):
             result = json.loads(response.read())
 
         self.assertTrue(result["staged"])
-        self.assertEqual(result["agent_type"], "v4_flash_worker")
+        self.assertEqual(result["agent_type"], "opencode_go_v4_worker")
         self.assertEqual(self.stager.assignments, [assignment])
         self.assertEqual(self.upstream.requests, [])
 

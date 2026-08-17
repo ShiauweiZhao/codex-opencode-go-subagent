@@ -96,7 +96,7 @@ class SubprocessHandoffStagerTests(unittest.TestCase):
                     {
                         "staged": True,
                         "handoff_id": "12345678-1234-5678-1234-567812345678",
-                        "agent_type": "v4_flash_worker",
+                        "agent_type": "opencode_go_v4_worker",
                         "expires_at": "2026-08-12T02:00:00+00:00",
                         "pending_path": "/private/state/pending.json",
                     }

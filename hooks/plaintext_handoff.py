@@ -17,7 +17,7 @@ else:
     fcntl = None
 
 
-AGENT_TYPE = "v4_flash_worker"
+AGENT_TYPE = "opencode_go_v4_worker"
 
 
 class EnvelopeError(ValueError):
@@ -151,7 +151,7 @@ def stage_locked(root: pathlib.Path, ttl_seconds: int, assignment: str) -> Tuple
     replace_expired = False
     reconcile_claims(root, now)
     if any(root.glob(f"{AGENT_TYPE}.claimed.*.json")) or any(root.glob(f"{AGENT_TYPE}.failed.*.json")):
-        fail("A v4_flash_worker handoff is already claimed or quarantined. Resolve it before staging another.", 3)
+        fail("An opencode_go_v4_worker handoff is already claimed or quarantined. Resolve it before staging another.", 3)
     if pending.exists():
         try:
             with pending.open(encoding="utf-8") as stream:
@@ -167,7 +167,7 @@ def stage_locked(root: pathlib.Path, ttl_seconds: int, assignment: str) -> Tuple
             except EnvelopeError:
                 fail("The existing Flash handoff has an invalid schema, agent type, assignment, or expiry. Refusing to replace it.", 9)
             if expires_at > now:
-                fail("A v4_flash_worker handoff is already pending. Let it be consumed or expire before staging another.", 3)
+                fail("An opencode_go_v4_worker handoff is already pending. Let it be consumed or expire before staging another.", 3)
             replace_expired = True
     envelope = {
         "schema": 1,
@@ -194,7 +194,7 @@ def stage_locked(root: pathlib.Path, ttl_seconds: int, assignment: str) -> Tuple
             try:
                 os.link(temporary, pending)
             except FileExistsError:
-                fail("A v4_flash_worker handoff is already pending. Consume or remove it before staging another.", 3)
+                fail("An opencode_go_v4_worker handoff is already pending. Consume or remove it before staging another.", 3)
             except OSError as error:
                 transport_failure("publishing a pending handoff", error)
     except OSError as error:
@@ -237,9 +237,9 @@ def run_target_hook_locked(root: pathlib.Path, hook_input: dict) -> None:
     reconcile_claims(root, now)
     pending = root / f"{AGENT_TYPE}.pending.json"
     if any(root.glob(f"{AGENT_TYPE}.claimed.*.json")) or any(root.glob(f"{AGENT_TYPE}.failed.*.json")):
-        fail("A plaintext handoff is already claimed or quarantined for a v4_flash_worker.", 11)
+        fail("A plaintext handoff is already claimed or quarantined for an opencode_go_v4_worker.", 11)
     if not pending.exists():
-        fail("No plaintext handoff was available for the v4_flash_worker start.", 10)
+        fail("No plaintext handoff was available for the opencode_go_v4_worker start.", 10)
     agent_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(hook_input.get("agent_id") or uuid.uuid4().hex))
     claimed = root / f"{AGENT_TYPE}.claimed.{agent_id}.{uuid.uuid4().hex}.json"
     try:
@@ -270,7 +270,7 @@ def run_target_hook_locked(root: pathlib.Path, hook_input: dict) -> None:
     assignment = envelope["assignment"]
 
     additional_context = (
-        "You are the spawned v4_flash_worker child, not the root agent. The parent supplied the complete task below "
+        "You are the spawned opencode_go_v4_worker child, not the root agent. The parent supplied the complete task below "
         "through a one-time plaintext handoff because provider-internal collaboration ciphertext is not a reliable "
         "cross-provider task carrier. Treat this as the task contract. Do not continue the parent's unrelated work "
         "and do not report the assignment missing merely because the encrypted collaboration payload is unreadable.\n\n"

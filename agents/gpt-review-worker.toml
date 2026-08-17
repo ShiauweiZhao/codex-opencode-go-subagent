@@ -1,6 +1,6 @@
 name = "gpt_review_worker"
 
-description = "Read-only reviewer for changes produced by v4_flash_worker. Spawn it only from the main OpenAI-backed GPT agent so it inherits the GPT model selected by the user."
+description = "Read-only reviewer for changes produced by opencode_go_v4_worker. Spawn it only from the main OpenAI-backed GPT agent so it inherits the GPT model selected by the user."
 
 developer_instructions = """
 Review only the exact diff and validation evidence assigned by the parent.

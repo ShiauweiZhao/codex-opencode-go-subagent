@@ -413,7 +413,7 @@ class ManagedBridgeServiceTests(unittest.TestCase):
             or {
                 "staged": True,
                 "handoff_id": "12345678-1234-5678-1234-567812345678",
-                "agent_type": "v4_flash_worker",
+                "agent_type": "opencode_go_v4_worker",
                 "expires_at": "2026-08-12T02:00:00+00:00",
             },
         )
@@ -460,7 +460,7 @@ class ServiceEntryPointTests(unittest.TestCase):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(b'{"staged":true,"agent_type":"v4_flash_worker"}')
+                self.wfile.write(b'{"staged":true,"agent_type":"opencode_go_v4_worker"}')
 
             def log_message(self, format, *args):
                 return
@@ -745,7 +745,7 @@ class ServiceEntryPointTests(unittest.TestCase):
                 return {
                     "staged": True,
                     "handoff_id": "12345678-1234-5678-1234-567812345678",
-                    "agent_type": "v4_flash_worker",
+                    "agent_type": "opencode_go_v4_worker",
                     "expires_at": "2026-08-12T02:00:00+00:00",
                 }
 

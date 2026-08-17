@@ -12,8 +12,10 @@ restarts it after an unexpected exit.
 
 The first release of this lifecycle integration is macOS-specific. Linux keeps
 the existing explicit bridge command until a secret-service backend is designed
-and tested. No Docker runtime, second Codex process, MCP server, or model
-fallback is introduced.
+and tested; the installer renders the Linux agent TOML with
+`env_key = "CODEX_OPENCODE_BRIDGE_TOKEN"` so Codex reads the same local bearer
+exported for the bridge process. No Docker runtime, second Codex process, MCP
+server, or model fallback is introduced.
 
 ## Components and data flow
 
@@ -30,10 +32,12 @@ and starts the existing localhost server. Neither credential appears in the
 plist, process arguments, repository, handoff state, or normal logs.
 
 The custom agent provider no longer relies on a GUI-wide `launchctl setenv`.
-Instead it uses Codex's command-backed provider authentication. The installer
+On macOS it uses Codex's command-backed provider authentication: the installer
 renders the absolute installed service-launcher path into the managed agent TOML;
 Codex executes `print-bridge-token`, caches the returned local token, and sends
-it only to `127.0.0.1:4141`. The upstream key is never returned to Codex.
+it only to `127.0.0.1:4141`. On Linux the installer renders
+`env_key = "CODEX_OPENCODE_BRIDGE_TOKEN"` instead. The upstream key is never
+returned to Codex on either platform.
 
 `stage-handoff` reads one assignment from stdin and posts it to a fixed,
 bearer-authenticated loopback endpoint. The already-running LaunchAgent invokes

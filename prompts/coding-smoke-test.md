@@ -5,18 +5,18 @@ under `/private/tmp`; never use the product repository for this smoke.
 
 1. Create and commit a tiny failing fixture containing one source file and one
    test file. Record the baseline commit.
-2. Generate a fresh marker and use `$use-v4-flash-worker` exactly as installed.
+2. Generate a fresh marker and use `$use-opencode-go-v4-worker` exactly as installed.
 3. Stage a self-contained coding assignment that names:
    - the throwaway repository as its only workspace scope;
    - the source file as its only writable scope;
    - the test command it must run;
    - the test file, Git metadata, credentials, and external systems as excluded;
    - the marker, exact changed-files list, validation output, and stopping rule.
-4. Spawn native `v4_flash_worker` with `fork_turns="none"` and wait for callback.
+4. Spawn native `opencode_go_v4_worker` with `fork_turns="none"` and wait for callback.
 5. The preselected GPT parent, optionally through read-only `gpt_review_worker`,
    audits actual child tool-call evidence, not callback claims. Correlate traces
    by the recorded marker: locate the parent-visible child rollout JSONL under
-   `$CODEX_HOME/sessions` (or `~/.codex/sessions`) by `v4_flash_worker` session
+   `$CODEX_HOME/sessions` (or `~/.codex/sessions`) by `opencode_go_v4_worker` session
    metadata, and the bridge response chain in
    `$CODEX_HOME/opencode-go-subagent/state.sqlite3` by the same marker. Do not
    print unrelated prompt/state content or secrets.
