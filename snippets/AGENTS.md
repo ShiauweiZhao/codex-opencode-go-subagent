@@ -1,5 +1,5 @@
 <!-- codex-opencode-go-subagent:start -->
-- Code implementation defaults to `v4_flash_worker`: features, bug fixes,
+- Code implementation defaults to `opencode_go_v4_worker`: features, bug fixes,
   refactors, tests, code-related documentation, and cross-module wiring after
   the parent has resolved interfaces and behavior. Multi-file or cross-module
   complexity is not by itself a reason to refuse V4; the preselected GPT parent
@@ -28,7 +28,7 @@
   pushes, creates pull requests, performs final review or verification, handles
   provider fallback or credentials, or escalates permissions; the OpenCode Go
   bridge fails closed with no provider switch.
-- Before spawning or troubleshooting `v4_flash_worker`, use
-  `$use-v4-flash-worker` and its plaintext-Hook workflow. Never bypass it with
+- Before spawning or troubleshooting `opencode_go_v4_worker`, use
+  `$use-opencode-go-v4-worker` and its plaintext-Hook workflow. Never bypass it with
   inherited turns, direct API calls, another CLI, or a fallback provider.
 <!-- codex-opencode-go-subagent:end -->

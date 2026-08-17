@@ -5,6 +5,11 @@
 implementation）：功能、修复、重构、测试、代码相关文档与 GPT 解析后的跨模块
 接线默认归 V4；复杂/多文件/跨模块不再默认由 GPT 编码，GPT 先消除歧义并拆成
 一个或多个有界 coding assignment。
+契约更新：2026-08-16 —— 部署身份从 `v4_flash_worker` 改为
+`opencode_go_v4_worker`（agent、skill、Hook matcher、staged handoff 目标一致），
+以便与已安装的直接 DeepSeek `v4_flash_worker` 共存；Linux 安装把 provider auth
+渲染为 `env_key = "CODEX_OPENCODE_BRIDGE_TOKEN"`，macOS 保持 command-backed
+`codex-opencode-go-service print-bridge-token`。
 
 ## 结论
 
@@ -96,9 +101,9 @@ OpenCode Go 使用 Chat Completions**。多出的本地进程换来了明确、�
 
 ### 2. `Utopia-V`：最适合作为控制面蓝本
 
-它把 provider 定义放在独立 `v4_flash_worker.toml` 内，不向顶层 `config.toml` 增加 DeepSeek provider，也不切换 parent；这与 Codex 官方的 custom agent 配置层模型一致。Codex 官方说明 standalone custom agent 可以覆盖普通 session 支持的 model/provider 等设置，且 agent 文件中的 model 优先于 parent。[Codex Subagents](https://developers.openai.com/codex/subagents/#custom-agents)
+它把 provider 定义放在独立 `opencode-go-v4-worker.toml` 内，不向顶层 `config.toml` 增加 DeepSeek provider，也不切换 parent；这与 Codex 官方的 custom agent 配置层模型一致。Codex 官方说明 standalone custom agent 可以覆盖普通 session 支持的 model/provider 等设置，且 agent 文件中的 model 优先于 parent。[Codex Subagents](https://developers.openai.com/codex/subagents/#custom-agents)
 
-它还正面处理了 OpenAI parent → 非 OpenAI child 的任务正文可能落入 provider-internal ciphertext 的问题：父 Agent 先把完整 assignment 写入一次性本地状态，精确匹配 `^v4_flash_worker$` 的受信 `SubagentStart` Hook 原子 claim，再作为 developer context 注入；child 仍使用 Codex 原生 spawn、wait/callback。[advanced design](https://github.com/Utopia-V/codex-deepseek-subagent/blob/1377b7655ea98ed50a5131172b579b56ed744793/docs/advanced.md) [POSIX hook](https://github.com/Utopia-V/codex-deepseek-subagent/blob/1377b7655ea98ed50a5131172b579b56ed744793/hooks/plaintext_handoff.py) [27-test POSIX suite](https://github.com/Utopia-V/codex-deepseek-subagent/blob/1377b7655ea98ed50a5131172b579b56ed744793/tests/test_plaintext_handoff.py)
+它还正面处理了 OpenAI parent → 非 OpenAI child 的任务正文可能落入 provider-internal ciphertext 的问题：父 Agent 先把完整 assignment 写入一次性本地状态，精确匹配 `^opencode_go_v4_worker$` 的受信 `SubagentStart` Hook 原子 claim，再作为 developer context 注入；child 仍使用 Codex 原生 spawn、wait/callback。[advanced design](https://github.com/Utopia-V/codex-deepseek-subagent/blob/1377b7655ea98ed50a5131172b579b56ed744793/docs/advanced.md) [POSIX hook](https://github.com/Utopia-V/codex-deepseek-subagent/blob/1377b7655ea98ed50a5131172b579b56ed744793/hooks/plaintext_handoff.py) [27-test POSIX suite](https://github.com/Utopia-V/codex-deepseek-subagent/blob/1377b7655ea98ed50a5131172b579b56ed744793/tests/test_plaintext_handoff.py)
 
 本机此前安装同一提交并完成过 27 项无付费本地协议测试，但没有进行 live provider/child smoke；因此它能证明 handoff 实现与本机配置等价，不能替代 OpenCode Go 实时兼容验收。
 
@@ -122,7 +127,7 @@ Codex 主 Agent（预选 GPT / 原 OpenAI provider / ChatGPT 登录）
   |
   | macOS: managed localhost stage-handoff
   | Linux: direct Hook stage
-  | spawn_agent(agent_type="v4_flash_worker", fork_turns="none")
+  | spawn_agent(agent_type="opencode_go_v4_worker", fork_turns="none")
   | parent 可并行派发多个独立 V4 child（independent / non-conflicting /
   | dependency-free 的 writable scopes）；批次有依赖或修改同一文件才顺序执行
   v
@@ -153,12 +158,12 @@ V4 child 在显式 scope 内产出实现 diff（功能/修复/重构/测试/代�
 
 ### 新仓库只保留这些模块
 
-- `agents/v4-flash-worker.toml`
+- `agents/opencode-go-v4-worker.toml`
 - `agents/gpt-review-worker.toml`（不固定 model/provider，继承 GPT parent）
 - per-child model catalog（仅提供模型元数据；特性列表把 0.147 的
   `apply_patch_freeform` 标记为移除，不声明 `apply_patch_tool_type`，也不启用
   原生自定义工具，不承载 GPT 审批或 review）
-- `skills/use-v4-flash-worker/`
+- `skills/use-opencode-go-v4-worker/`
 - `hooks/plaintext_handoff.py` 及其 POSIX 协议测试
 - `bridge/`：Responses↔Chat 的纯协议适配、SSE、tool calls、tool-result continuation、短期 state、`/health`，以及 macOS 受管 handoff staging endpoint
 - `scripts/install.py`：幂等安装、备份/回滚、Hook 合并、静态检查

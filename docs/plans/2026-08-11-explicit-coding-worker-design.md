@@ -3,6 +3,11 @@
 Date: 2026-08-11
 Updated: 2026-08-12 - V4 becomes the default implementer; GPT resolves
 interfaces and behavior and decomposes work into bounded coding assignments.
+Updated: 2026-08-16 - the deployed identity is renamed from `v4_flash_worker` to
+`opencode_go_v4_worker` so the OpenCode Go worker coexists with an already
+installed direct-DeepSeek `v4_flash_worker`; Linux installs render provider auth
+as `env_key = "CODEX_OPENCODE_BRIDGE_TOKEN"` while macOS keeps command-backed
+`codex-opencode-go-service print-bridge-token`.
 Concurrency is the default expectation: when development work can be split into
 independent, non-conflicting, dependency-free writable scopes, the GPT parent
 proactively starts multiple V4 workers in parallel; batches execute sequentially
@@ -10,7 +15,7 @@ only when they share dependencies or edit the same files.
 
 ## Decision
 
-Make `v4_flash_worker` the default implementer: features, fixes, refactoring,
+Make `opencode_go_v4_worker` the default implementer: features, fixes, refactoring,
 tests, code-related documentation, and cross-module wiring land with V4 once the
 GPT parent has resolved the interfaces and behavior. Complexity, multiple files,
 or cross-module reach does not itself require GPT to write code; GPT first

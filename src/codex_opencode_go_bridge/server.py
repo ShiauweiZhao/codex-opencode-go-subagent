@@ -186,7 +186,7 @@ class SubprocessHandoffStager:
         if (
             not isinstance(parsed, dict)
             or parsed.get("staged") is not True
-            or parsed.get("agent_type") != "v4_flash_worker"
+            or parsed.get("agent_type") != "opencode_go_v4_worker"
         ):
             raise HandoffStageError("managed plaintext handoff returned an invalid result")
         return {
@@ -423,7 +423,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         path = self.path.rstrip("/")
         if path not in {
             "/v1/responses",
-            "/internal/handoffs/v4_flash_worker/stage",
+            "/internal/handoffs/opencode_go_v4_worker/stage",
         }:
             self._send(*_json_error(404, "not_found", "endpoint not found"))
             return
@@ -444,7 +444,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             self._send(*_json_error(400, "invalid_request_error", "request body must be an object"))
             return
-        if path == "/internal/handoffs/v4_flash_worker/stage":
+        if path == "/internal/handoffs/opencode_go_v4_worker/stage":
             result = self.service.stage_handoff(body, self.headers.get("Authorization"))
         else:
             result = self.service.respond(body, self.headers.get("Authorization"))

@@ -68,8 +68,67 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(payload["tools"][0]["function"]["name"], "functions_exec-command")
         self.assertEqual(context.reverse_tool_names, {"functions_exec-command": "functions.exec-command"})
         self.assertFalse(payload["stream"])
+        self.assertEqual(payload["reasoning_effort"], "high")
         for unsupported in ("parallel_tool_calls", "reasoning", "store", "tool_choice"):
             self.assertNotIn(unsupported, payload)
+
+    def test_build_chat_request_forwards_max_reasoning_effort(self):
+        payload, _ = build_chat_request(
+            {
+                "model": "deepseek-v4-flash",
+                "input": "Solve the bounded assignment.",
+                "reasoning": {"effort": "max"},
+            }
+        )
+
+        self.assertEqual(payload["reasoning_effort"], "max")
+
+    def test_build_chat_request_forwards_low_reasoning_effort(self):
+        payload, _ = build_chat_request(
+            {
+                "model": "deepseek-v4-flash",
+                "input": "Solve the bounded assignment.",
+                "reasoning": {"effort": "low"},
+            }
+        )
+
+        self.assertEqual(payload["reasoning_effort"], "low")
+
+    def test_build_chat_request_omits_reasoning_effort_when_reasoning_absent(self):
+        payload, _ = build_chat_request(
+            {
+                "model": "deepseek-v4-flash",
+                "input": "Solve the bounded assignment.",
+            }
+        )
+
+        self.assertNotIn("reasoning_effort", payload)
+
+    def test_build_chat_request_rejects_malformed_reasoning(self):
+        for reasoning in ("high", {}, {"effort": 1}, {"effort": None}):
+            with self.subTest(reasoning=reasoning), self.assertRaisesRegex(
+                ProtocolError, "reasoning"
+            ):
+                build_chat_request(
+                    {
+                        "model": "deepseek-v4-flash",
+                        "input": "Solve the bounded assignment.",
+                        "reasoning": reasoning,
+                    }
+                )
+
+    def test_build_chat_request_rejects_unsupported_reasoning_effort(self):
+        for effort in ("medium", "ultra", "x-high"):
+            with self.subTest(effort=effort), self.assertRaisesRegex(
+                ProtocolError, "unsupported reasoning effort"
+            ):
+                build_chat_request(
+                    {
+                        "model": "deepseek-v4-flash",
+                        "input": "Solve the bounded assignment.",
+                        "reasoning": {"effort": effort},
+                    }
+                )
 
     def test_build_chat_request_maps_apply_patch_custom_tool_to_upstream_function(self):
         body = {

@@ -7,10 +7,18 @@
 - 两者必须不同。bridge 会拒绝复用同一个值。
 - macOS 托管模式把两者保存为登录 Keychain generic-password item；LaunchAgent
   启动时通过原生 Security Framework 读取，不经 `security` 子进程或命令参数。
-- Codex 的 command-backed provider auth 只能取得本地 bearer，不能取得上游 key。
+- macOS 的 agent TOML 使用 command-backed provider auth：Codex 执行受管
+  `codex-opencode-go-service print-bridge-token`，只能取得本地 bearer，不能取得
+  上游 key。
+- Linux 的 agent TOML 使用 `env_key = "CODEX_OPENCODE_BRIDGE_TOKEN"`：Codex 从
+  与 bridge 相同的可信 shell 环境读取本地 bearer；该变量只承载本地 loopback
+  鉴权，不是上游 key。
 - `configure` 和显式 `rotate-local-token` 会轮换本地 bearer；迁移旧安装时应先
   `launchctl unsetenv CODEX_OPENCODE_BRIDGE_TOKEN`，避免 GUI-wide 凭据继续存在。
 - 不要把任一凭据放入 agent TOML、prompt、Hook assignment、仓库、Issue、日志或截图。
+- 本项目的部署身份固定为 `opencode_go_v4_worker`（agent、skill、Hook matcher、
+  staged handoff 目标一致），与已安装的直接 DeepSeek `v4_flash_worker` 不共享
+  路径、matcher 或受管块；安装器拒绝覆盖任何非本 manifest 管理的文件。
 - 默认上游 URL 必须为 HTTPS；只有 loopback 测试地址允许 HTTP。
 
 ## Local data
@@ -65,7 +73,7 @@ state 目录。client 禁用系统代理与 HTTP 重定向；endpoint 不调用 
 - 不存在运行时 fallback。
 - `/healthz` 与 `/v1/models` 不调用上游，也不返回凭据；`/v1/responses` 与受管
   handoff staging endpoint 都必须携带本地 bearer。staging endpoint 只接受固定
-  `v4_flash_worker` assignment，并执行已安装 Hook 的 stage 模式。
+  `opencode_go_v4_worker` assignment，并执行已安装 Hook 的 stage 模式。
 - macOS LaunchAgent plist 不含凭据，并在非正常退出后由 `launchd` 自动重启。
 
 ## External data boundary

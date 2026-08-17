@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -46,28 +47,28 @@ class InstallerTests(unittest.TestCase):
         self.auth_digest = digest(self.codex_home / "auth.json")
 
     def test_install_is_idempotent_and_preserves_parent_config_and_login(self):
-        first = install(self.repo_root, self.codex_home)
-        second = install(self.repo_root, self.codex_home)
+        first = install(self.repo_root, self.codex_home, platform="linux")
+        second = install(self.repo_root, self.codex_home, platform="linux")
 
         self.assertEqual(first["status"], "installed")
         self.assertEqual(second["status"], "already_installed")
         self.assertEqual(digest(self.codex_home / "config.toml"), self.config_digest)
         self.assertEqual(digest(self.codex_home / "auth.json"), self.auth_digest)
 
-        agent = (self.codex_home / "agents" / "v4-flash-worker.toml").read_text()
+        agent = (self.codex_home / "agents" / "opencode-go-v4-worker.toml").read_text()
+        self.assertIn('name = "opencode_go_v4_worker"', agent)
         self.assertIn('model = "deepseek-v4-flash"', agent)
         self.assertIn('wire_api = "responses"', agent)
         self.assertIn("http://127.0.0.1:4141/v1", agent)
         self.assertNotIn("OPENCODE_GO_API_KEY", agent)
-        self.assertNotIn('env_key = "CODEX_OPENCODE_BRIDGE_TOKEN"', agent)
-        self.assertIn("[model_providers.opencode_go_bridge.auth]", agent)
-        expected_service = (
-            self.codex_home
-            / "opencode-go-subagent"
-            / "bin"
-            / "codex-opencode-go-service"
-        ).resolve()
-        self.assertIn(f'command = "{expected_service}"', agent)
+        parsed_agent = tomllib.loads(agent)
+        provider = parsed_agent["model_providers"]["opencode_go_bridge"]
+        self.assertEqual(provider["env_key"], "CODEX_OPENCODE_BRIDGE_TOKEN")
+        self.assertNotIn("auth", provider)
+        self.assertIn('env_key = "CODEX_OPENCODE_BRIDGE_TOKEN"', agent)
+        self.assertNotIn("print-bridge-token", agent)
+        self.assertNotIn('args = ["print-bridge-token"]', agent)
+        self.assertNotIn("__CODEX_OPENCODE_GO_AUTH_BODY__", agent)
         model_catalog = (
             self.codex_home
             / "opencode-go-subagent"
@@ -77,6 +78,11 @@ class InstallerTests(unittest.TestCase):
         self.assertIn(f'model_catalog_json = "{model_catalog}"', agent)
         model = json.loads(model_catalog.read_text())["models"][0]
         self.assertEqual(model["slug"], "deepseek-v4-flash")
+        self.assertEqual(model["default_reasoning_level"], "max")
+        self.assertEqual(
+            [level["effort"] for level in model["supported_reasoning_levels"]],
+            ["low", "high", "max"],
+        )
         self.assertNotIn("apply_patch_tool_type", model)
         self.assertIsNone(model["auto_review_model_override"])
         self.assertNotIn("sandbox_mode", agent)
@@ -120,7 +126,7 @@ class InstallerTests(unittest.TestCase):
         target = [
             item
             for item in hooks["hooks"]["SubagentStart"]
-            if item.get("matcher") == "^v4_flash_worker$"
+            if item.get("matcher") == "^opencode_go_v4_worker$"
         ]
         self.assertEqual(len(target), 1)
         command = target[0]["hooks"][0]["command"]
@@ -132,19 +138,19 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(agents_text.count("codex-opencode-go-subagent:start"), 1)
 
     def test_installed_policy_defaults_implementation_to_v4_with_explicit_scope(self):
-        install(self.repo_root, self.codex_home)
+        install(self.repo_root, self.codex_home, platform="linux")
 
         def collapsed(text):
             return " ".join(text.split())
 
         agent = collapsed(
-            (self.codex_home / "agents" / "v4-flash-worker.toml").read_text()
+            (self.codex_home / "agents" / "opencode-go-v4-worker.toml").read_text()
         )
         skill = collapsed(
             (
                 self.codex_home
                 / "skills"
-                / "use-v4-flash-worker"
+                / "use-opencode-go-v4-worker"
                 / "SKILL.md"
             ).read_text()
         )
@@ -233,14 +239,14 @@ class InstallerTests(unittest.TestCase):
         surfaces = {
             "root AGENTS": (self.repo_root / "AGENTS.md").read_text(),
             "installed AGENTS snippet": (self.repo_root / "snippets" / "AGENTS.md").read_text(),
-            "worker role": (self.repo_root / "agents" / "v4-flash-worker.toml").read_text(),
+            "worker role": (self.repo_root / "agents" / "opencode-go-v4-worker.toml").read_text(),
             "worker skill": (
-                self.repo_root / "skills" / "use-v4-flash-worker" / "SKILL.md"
+                self.repo_root / "skills" / "use-opencode-go-v4-worker" / "SKILL.md"
             ).read_text(),
             "worker skill yaml": (
                 self.repo_root
                 / "skills"
-                / "use-v4-flash-worker"
+                / "use-opencode-go-v4-worker"
                 / "agents"
                 / "openai.yaml"
             ).read_text(),
@@ -320,7 +326,7 @@ class InstallerTests(unittest.TestCase):
                     self.assertNotIn(stale, lowered)
 
     def test_uninstall_removes_only_managed_files_and_hook(self):
-        install(self.repo_root, self.codex_home)
+        install(self.repo_root, self.codex_home, platform="linux")
 
         class FakeManagedService:
             def __init__(self):
@@ -337,7 +343,7 @@ class InstallerTests(unittest.TestCase):
         report = uninstall(self.codex_home, service_manager=service)
 
         self.assertEqual(report["status"], "uninstalled")
-        self.assertFalse((self.codex_home / "agents" / "v4-flash-worker.toml").exists())
+        self.assertFalse((self.codex_home / "agents" / "opencode-go-v4-worker.toml").exists())
         self.assertFalse(
             (self.codex_home / "hooks" / "codex-opencode-go-subagent" / "plaintext_handoff.py").exists()
         )
@@ -371,7 +377,7 @@ class InstallerTests(unittest.TestCase):
                     "secrets_preserved": not purge_secrets,
                 }
 
-        install(self.repo_root, self.codex_home)
+        install(self.repo_root, self.codex_home, platform="linux")
         service = FakeManagedService()
 
         report = uninstall(
@@ -384,7 +390,7 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(report["service"]["secrets_preserved"])
 
     def test_uninstall_without_service_manager_is_portable_off_macos(self):
-        install(self.repo_root, self.codex_home)
+        install(self.repo_root, self.codex_home, platform="linux")
 
         with patch.object(installer_module.sys, "platform", "linux"):
             report = uninstall(self.codex_home)
@@ -412,15 +418,152 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)["status"], "installed")
 
     def test_install_refuses_to_overwrite_an_unmanaged_agent(self):
-        agent = self.codex_home / "agents" / "v4-flash-worker.toml"
+        agent = self.codex_home / "agents" / "opencode-go-v4-worker.toml"
         agent.parent.mkdir(parents=True)
         agent.write_text("user-owned agent\n")
 
         with self.assertRaisesRegex(RuntimeError, "unmanaged or modified"):
-            install(self.repo_root, self.codex_home)
+            install(self.repo_root, self.codex_home, platform="linux")
 
         self.assertEqual(agent.read_text(), "user-owned agent\n")
         self.assertFalse((self.codex_home / "opencode-go-subagent").exists())
+
+
+    def test_install_renders_macos_command_auth_when_platform_is_darwin(self):
+        report = install(self.repo_root, self.codex_home, platform="darwin")
+
+        self.assertEqual(report["status"], "installed")
+        agent = (self.codex_home / "agents" / "opencode-go-v4-worker.toml").read_text()
+        expected_service = (
+            self.codex_home
+            / "opencode-go-subagent"
+            / "bin"
+            / "codex-opencode-go-service"
+        ).resolve()
+        self.assertIn(f'command = "{expected_service}"', agent)
+        parsed_agent = tomllib.loads(agent)
+        provider = parsed_agent["model_providers"]["opencode_go_bridge"]
+        self.assertNotIn("env_key", provider)
+        self.assertEqual(provider["auth"]["command"], str(expected_service))
+        self.assertIn('args = ["print-bridge-token"]', agent)
+        self.assertIn("timeout_ms = 5000", agent)
+        self.assertIn("refresh_interval_ms = 300000", agent)
+        self.assertNotIn('env_key = "CODEX_OPENCODE_BRIDGE_TOKEN"', agent)
+        self.assertNotIn("__CODEX_OPENCODE_GO_AUTH_BODY__", agent)
+        self.assertNotIn("__CODEX_OPENCODE_GO_MODEL_CATALOG__", agent)
+
+    def test_install_rejects_unknown_platform(self):
+        with self.assertRaisesRegex(RuntimeError, "unsupported install platform"):
+            install(self.repo_root, self.codex_home, platform="windows")
+
+    def test_install_manifest_records_new_identity_and_matcher(self):
+        install(self.repo_root, self.codex_home, platform="linux")
+
+        manifest = json.loads(
+            (
+                self.codex_home
+                / "opencode-go-subagent"
+                / "install-manifest.json"
+            ).read_text()
+        )
+        self.assertEqual(manifest["agent"], "opencode_go_v4_worker")
+        self.assertEqual(manifest["hook_matcher"], "^opencode_go_v4_worker$")
+        self.assertIn("agents/opencode-go-v4-worker.toml", manifest["managed_files"])
+        self.assertIn("agents/gpt-review-worker.toml", manifest["managed_files"])
+        self.assertIn(
+            "skills/use-opencode-go-v4-worker/SKILL.md", manifest["managed_files"]
+        )
+        self.assertNotIn("agents/v4-flash-worker.toml", manifest["managed_files"])
+        self.assertNotIn("skills/use-v4-flash-worker/SKILL.md", manifest["managed_files"])
+
+    def test_install_refuses_unmanaged_collision_on_skill_path(self):
+        skill = (
+            self.codex_home / "skills" / "use-opencode-go-v4-worker" / "SKILL.md"
+        )
+        skill.parent.mkdir(parents=True)
+        skill.write_text("user-owned skill\n")
+
+        with self.assertRaisesRegex(RuntimeError, "unmanaged or modified"):
+            install(self.repo_root, self.codex_home, platform="linux")
+
+        self.assertEqual(skill.read_text(), "user-owned skill\n")
+        self.assertFalse((self.codex_home / "opencode-go-subagent").exists())
+
+    def test_old_identity_files_are_left_to_the_existing_direct_deepseek_worker(self):
+        old_agent = self.codex_home / "agents" / "v4-flash-worker.toml"
+        old_agent.parent.mkdir(parents=True)
+        old_agent.write_text("direct-deepseek agent\n")
+        old_skill = self.codex_home / "skills" / "use-v4-flash-worker" / "SKILL.md"
+        old_skill.parent.mkdir(parents=True)
+        old_skill.write_text("direct-deepseek skill\n")
+        manifest_path = (
+            self.codex_home / "opencode-go-subagent" / "install-manifest.json"
+        )
+        manifest_path.parent.mkdir(parents=True)
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "managed_files": {
+                        "agents/v4-flash-worker.toml": digest(old_agent),
+                        "skills/use-v4-flash-worker/SKILL.md": digest(old_skill),
+                    },
+                    "hook_matcher": "^v4_flash_worker$",
+                    "agent": "v4_flash_worker",
+                }
+            )
+        )
+
+        report = install(self.repo_root, self.codex_home, platform="linux")
+
+        self.assertEqual(report["status"], "installed")
+        self.assertEqual(old_agent.read_text(), "direct-deepseek agent\n")
+        self.assertEqual(old_skill.read_text(), "direct-deepseek skill\n")
+        manifest = json.loads(manifest_path.read_text())
+        self.assertNotIn("agents/v4-flash-worker.toml", manifest["managed_files"])
+        self.assertNotIn(
+            "skills/use-v4-flash-worker/SKILL.md", manifest["managed_files"]
+        )
+        uninstall(self.codex_home)
+        self.assertTrue(old_agent.exists())
+        self.assertTrue(old_skill.exists())
+        self.assertFalse(
+            (self.codex_home / "agents" / "opencode-go-v4-worker.toml").exists()
+        )
+
+    def test_worker_identity_is_opencode_go_v4_worker_everywhere(self):
+        self.assertEqual(installer_module.AGENT_NAME, "opencode_go_v4_worker")
+        self.assertEqual(installer_module.HOOK_MATCHER, "^opencode_go_v4_worker$")
+        role = (self.repo_root / "agents" / "opencode-go-v4-worker.toml").read_text()
+        skill = (
+            self.repo_root / "skills" / "use-opencode-go-v4-worker" / "SKILL.md"
+        ).read_text()
+        skill_yaml = (
+            self.repo_root
+            / "skills"
+            / "use-opencode-go-v4-worker"
+            / "agents"
+            / "openai.yaml"
+        ).read_text()
+        snippet = (self.repo_root / "snippets" / "AGENTS.md").read_text()
+        hooks_example = (self.repo_root / "hooks" / "hooks.posix.example.json").read_text()
+        reviewer = (self.repo_root / "agents" / "gpt-review-worker.toml").read_text()
+
+        self.assertIn('name = "opencode_go_v4_worker"', role)
+        self.assertIn("$use-opencode-go-v4-worker", role)
+        self.assertIn("opencode_go_v4_worker", skill)
+        self.assertIn("name: use-opencode-go-v4-worker", skill)
+        self.assertIn("$use-opencode-go-v4-worker", skill_yaml)
+        self.assertIn("opencode_go_v4_worker", snippet)
+        self.assertIn("$use-opencode-go-v4-worker", snippet)
+        self.assertIn('"matcher": "^opencode_go_v4_worker$"', hooks_example)
+        self.assertIn("opencode_go_v4_worker", reviewer)
+        self.assertNotIn("v4_flash_worker", reviewer)
+
+        for surface in (role, skill, skill_yaml, snippet, hooks_example):
+            with self.subTest(surface=surface[:40]):
+                self.assertNotIn("v4_flash_worker", surface)
+                self.assertNotIn("use-v4-flash-worker", surface)
 
 
 if __name__ == "__main__":

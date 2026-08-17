@@ -1,13 +1,13 @@
 ---
-name: use-v4-flash-worker
-description: Use the OpenCode Go backed v4_flash_worker through the installed one-shot plaintext SubagentStart Hook. Use whenever Codex considers spawning, continuing, or troubleshooting this worker; it governs task suitability, staging, fork_turns=none spawning, return, and the external provider data boundary.
+name: use-opencode-go-v4-worker
+description: Use the OpenCode Go backed opencode_go_v4_worker through the installed one-shot plaintext SubagentStart Hook. Use whenever Codex considers spawning, continuing, or troubleshooting this worker; it governs task suitability, staging, fork_turns=none spawning, return, and the external provider data boundary.
 ---
 
-# Use V4 Flash Worker
+# Use OpenCode Go V4 Worker
 
 ## Choose the worker
 
-- Code implementation defaults to `v4_flash_worker`: features, bug fixes,
+- Code implementation defaults to `opencode_go_v4_worker`: features, bug fixes,
   refactors, tests, code-related documentation, and cross-module wiring after
   the parent has resolved interfaces and behavior. Multi-file or cross-module
   complexity is not by itself a reason to refuse V4.
@@ -66,7 +66,7 @@ description: Use the OpenCode Go backed v4_flash_worker through the installed on
    stage. Do not fall back to direct filesystem staging when managed staging
    fails; report the exact service boundary instead.
 4. Immediately call native `spawn_agent` with exact agent type
-   `v4_flash_worker`, a unique task name, and `fork_turns="none"`. The spawn
+   `opencode_go_v4_worker`, a unique task name, and `fork_turns="none"`. The spawn
    message should only identify the trusted one-shot Hook.
 5. Receive the child through the native callback/wait path. Do not replace it
    with OpenCode CLI, MCP, direct API requests, or inherited root turns.
@@ -78,7 +78,7 @@ description: Use the OpenCode Go backed v4_flash_worker through the installed on
 ## Audit the coding oracle
 
 - The GPT parent must audit parent-visible child rollout JSONL selected by the
-  marker and `v4_flash_worker` session metadata, plus the bridge SQLite response
+  marker and `opencode_go_v4_worker` session metadata, plus the bridge SQLite response
   chain selected by the same marker. Callback text is not authoritative.
 - Rollout JSONL is under `$CODEX_HOME/sessions` (or `~/.codex/sessions`);
   bridge state is `$CODEX_HOME/opencode-go-subagent/state.sqlite3`. Never print

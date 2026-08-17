@@ -1,7 +1,7 @@
 # Repository instructions
 
 - Keep the parent Codex model/provider and ChatGPT login unchanged.
-- Code implementation defaults to `v4_flash_worker`: features, bug fixes,
+- Code implementation defaults to `opencode_go_v4_worker`: features, bug fixes,
   refactors, tests, code-related documentation, and cross-module wiring after
   interfaces and behavior are resolved. Multi-file or cross-module complexity is
   not by itself a reason to refuse V4; the preselected GPT parent first resolves

@@ -39,7 +39,7 @@ def resolve_script():
 
 
 SCRIPT = resolve_script()
-AGENT_TYPE = "v4_flash_worker"
+AGENT_TYPE = "opencode_go_v4_worker"
 
 
 def load_handoff_module():

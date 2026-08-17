@@ -2,7 +2,7 @@
 
 让 Codex 主任务继续使用用户预选的 GPT 模型和 ChatGPT 登录，把 OpenCode Go
 套餐中的 `deepseek-v4-flash` 注册为默认负责代码实现（default code
-implementation）的 `v4_flash_worker` 子 Agent。需求、分析、设计、架构、拆解、
+implementation）的 `opencode_go_v4_worker` 子 Agent。需求、分析、设计、架构、拆解、
 审查、最终验证、集成和 Git 由 GPT 负责。
 
 OpenCode Go 目前为该模型提供的是
@@ -16,6 +16,10 @@ Responses→Chat bridge，并复用经过并发/一次性交付测试的 plainte
 - 主 Agent 的顶层 `model`、`model_provider`、`config.toml` 和 ChatGPT 登录不变，
   安装器也不读取或改写主模型设置。
 - child 固定为 `deepseek-v4-flash`，不会 fallback 到其他模型。
+- 部署身份固定为 `opencode_go_v4_worker`（agent TOML、skill、Hook matcher 与
+  staged handoff 目标一致），以便与已安装的直接 DeepSeek `v4_flash_worker`
+  共存：两者不共享 agent/skill/Hook 路径或 matcher，安装器也不会改写对方的
+  文件、Hook 条目或 `AGENTS.md` 受管块。
 - V4 Flash 默认负责代码实现：功能、修复、重构、测试、代码相关文档，以及 GPT
   已解析接口/行为后的跨模块接线；不需要推理判断的逐项检索、提取和枚举也可以
   交给 V4。复杂、多文件、跨模块本身不是拒绝 V4 的理由；GPT 先消除歧义并拆成
@@ -47,6 +51,12 @@ Responses→Chat bridge，并复用经过并发/一次性交付测试的 plainte
 - GPT 负责需求、分析、设计、架构、拆解、审查、最终验证、集成与 Git；V4 默认负责
   明确 writable scope 内的代码实现。per-child model catalog 只提供模型元数据，不声明
   `apply_patch_tool_type`，也不启用任何原生自定义工具。
+- 推理级别：模型目录中 `deepseek-v4-flash` 的 `default_reasoning_level=max`，
+  `supported_reasoning_levels` 仅含 `low`/`high`/`max`。Codex Responses 的
+  `reasoning.effort` 由 bridge 原样转发为上游 Chat 请求的 `reasoning_effort`
+  （值不变）；请求未携带 `reasoning` 时上游不带该字段。格式错误或不支持的取值
+  （如 `medium`）会显式失败，不静默降级或 fallback；native 调用方也可以显式
+  设置 `reasoning_effort=max`。
 - 控制面沿用 Utopia-V 的 standalone child agent、一次性 plaintext Hook 与 native
   callback 边界：上游 Utopia 仓库仅作只读参考，本仓库不随其改版自动变更；这里的
   编码只允许在明确 writable scope 与验证命令下进行，需求、分析、设计、架构、
@@ -77,15 +87,15 @@ python3 scripts/install.py install
 
 它会安装：
 
-- `~/.codex/agents/v4-flash-worker.toml`
+- `~/.codex/agents/opencode-go-v4-worker.toml`
 - `~/.codex/agents/gpt-review-worker.toml`
-- `~/.codex/skills/use-v4-flash-worker/`
+- `~/.codex/skills/use-opencode-go-v4-worker/`
 - `~/.codex/hooks/codex-opencode-go-subagent/plaintext_handoff.py`
 - `~/.codex/opencode-go-subagent/runtime/`
 - `~/.codex/opencode-go-subagent/deepseek-v4-flash-models.json`
 - `~/.codex/opencode-go-subagent/bin/codex-opencode-go-bridge`
 - `~/.codex/opencode-go-subagent/bin/codex-opencode-go-service`
-- 精确匹配 `^v4_flash_worker$` 的 `SubagentStart` Hook
+- 精确匹配 `^opencode_go_v4_worker$` 的 `SubagentStart` Hook
 - `~/.codex/AGENTS.md` 中的受管路由块
 
 已有 Hook 和 `AGENTS.md` 内容会被保留；重复安装是幂等的。安装器不会伪造
@@ -135,13 +145,16 @@ macOS 上一次性 handoff 通过受管服务暂存，assignment 从 stdin 读�
 Hook stage 子进程只继承最小运行环境，不继承上游 key 或本地 bearer。受管 staging
 失败时明确停止，不静默改用直接脚本或其他 provider。
 
-provider 通过受管 service 命令只读取本地 bearer；上游 key 不会返回给 Codex。
-每次 `configure` 也会轮换本地 bearer，避免继承旧的 GUI-wide token。
+macOS 上 agent TOML 使用 command-backed provider auth：Codex 执行受管
+`codex-opencode-go-service print-bridge-token` 只读取本地 bearer；上游 key 不会
+返回给 Codex。每次 `configure` 也会轮换本地 bearer，避免继承旧的 GUI-wide token。
 
 ## Linux 手动启动
 
-Linux 尚未提供受测的 Secret Service/systemd 用户服务集成，暂时在可信 shell 或
-secret manager 中准备两个不同的值后显式启动：
+Linux 尚未提供受测的 Secret Service/systemd 用户服务集成。安装器在 Linux 上把
+agent TOML 的 provider auth 渲染为 `env_key = "CODEX_OPENCODE_BRIDGE_TOKEN"`，
+因此需要在启动 Codex 的同一可信 shell 中导出与 bridge 相同的本地 bearer，再显式
+启动 bridge（两个值必须不同）：
 
 ```bash
 export OPENCODE_GO_API_KEY="..."
@@ -149,10 +162,13 @@ export CODEX_OPENCODE_BRIDGE_TOKEN="$(python3 -c 'import secrets; print(secrets.
 ~/.codex/opencode-go-subagent/bin/codex-opencode-go-bridge
 ```
 
+Codex 会从 `CODEX_OPENCODE_BRIDGE_TOKEN` 读取同一个本地 bearer；不要在 agent
+TOML、prompt、Hook assignment、命令参数、日志或仓库中写入任一凭据值。
+
 ## 信任 Hook 与 smoke
 
 1. 在 Codex 输入 `/hooks`。
-2. 核对 matcher 仅为 `^v4_flash_worker$`，命令指向已安装的
+2. 核对 matcher 仅为 `^opencode_go_v4_worker$`，命令指向已安装的
    `plaintext_handoff.py --mode hook`，然后手动信任。
 3. 新建 Codex 任务。
 4. 明确接受一次很小的 OpenCode Go 调用后，先执行路由检查

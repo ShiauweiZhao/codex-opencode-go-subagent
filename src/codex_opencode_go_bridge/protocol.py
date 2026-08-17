@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterable
 
 JSON = dict[str, Any]
 SUPPORTED_MODEL = "deepseek-v4-flash"
+_SUPPORTED_REASONING_EFFORTS = ("low", "high", "max")
 _SAFE_EXEC_APPLY_PATCH = "safe_exec_apply_patch"
 _VALID_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _DROP_TOOL_TYPES = {
@@ -78,6 +79,20 @@ def _model_id(raw: Any) -> str:
     if model != SUPPORTED_MODEL:
         raise ProtocolError(f"unsupported model: {raw!r}; expected {SUPPORTED_MODEL}")
     return model
+
+
+def _reasoning_effort(body: JSON) -> str | None:
+    reasoning = body.get("reasoning")
+    if reasoning is None:
+        return None
+    if not isinstance(reasoning, dict) or not isinstance(reasoning.get("effort"), str):
+        raise ProtocolError("reasoning must be an object with a string effort field")
+    effort = reasoning["effort"]
+    if effort not in _SUPPORTED_REASONING_EFFORTS:
+        raise ProtocolError(
+            f"unsupported reasoning effort: {effort!r}; expected one of low, high, max"
+        )
+    return effort
 
 
 def _sanitize_tool_name(name: str, used: set[str]) -> str:
@@ -294,6 +309,9 @@ def build_chat_request(body: JSON, previous: JSON | None = None) -> tuple[JSON, 
     ):
         if body.get(source) is not None:
             payload[target] = body[source]
+    reasoning_effort = _reasoning_effort(body)
+    if reasoning_effort is not None:
+        payload["reasoning_effort"] = reasoning_effort
     return payload, ProtocolContext(
         messages=messages,
         reverse_tool_names=reverse,

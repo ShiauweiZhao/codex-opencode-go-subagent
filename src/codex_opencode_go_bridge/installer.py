@@ -15,10 +15,11 @@ from typing import Any
 JSON = dict[str, Any]
 AGENTS_START = "<!-- codex-opencode-go-subagent:start -->"
 AGENTS_END = "<!-- codex-opencode-go-subagent:end -->"
-AGENT_NAME = "v4_flash_worker"
+AGENT_NAME = "opencode_go_v4_worker"
 HOOK_MATCHER = f"^{AGENT_NAME}$"
 MANIFEST_RELATIVE = Path("opencode-go-subagent") / "install-manifest.json"
-SERVICE_PLACEHOLDER = "__CODEX_OPENCODE_GO_SERVICE__"
+AUTH_BODY_PLACEHOLDER = "__CODEX_OPENCODE_GO_AUTH_BODY__"
+AUTH_BODY_LINE = f"placeholder = \"{AUTH_BODY_PLACEHOLDER}\""
 MODEL_CATALOG_PLACEHOLDER = "__CODEX_OPENCODE_GO_MODEL_CATALOG__"
 PYTHON_PLACEHOLDER = "__PYTHON_EXECUTABLE__"
 
@@ -51,8 +52,8 @@ def _atomic_write(path: Path, data: bytes, mode: int = 0o600) -> bool:
 def _managed_sources(repo_root: Path) -> list[tuple[Path, Path, int]]:
     sources: list[tuple[Path, Path, int]] = [
         (
-            repo_root / "agents" / "v4-flash-worker.toml",
-            Path("agents") / "v4-flash-worker.toml",
+            repo_root / "agents" / "opencode-go-v4-worker.toml",
+            Path("agents") / "opencode-go-v4-worker.toml",
             0o600,
         ),
         (
@@ -71,9 +72,9 @@ def _managed_sources(repo_root: Path) -> list[tuple[Path, Path, int]]:
             0o700,
         ),
     ]
-    skill_root = repo_root / "skills" / "use-v4-flash-worker"
+    skill_root = repo_root / "skills" / "use-opencode-go-v4-worker"
     for source in sorted(path for path in skill_root.rglob("*") if path.is_file()):
-        sources.append((source, Path("skills") / "use-v4-flash-worker" / source.relative_to(skill_root), 0o600))
+        sources.append((source, Path("skills") / "use-opencode-go-v4-worker" / source.relative_to(skill_root), 0o600))
     package_root = repo_root / "src" / "codex_opencode_go_bridge"
     for source in sorted(path for path in package_root.rglob("*.py") if path.is_file()):
         sources.append(
@@ -103,14 +104,36 @@ def _managed_sources(repo_root: Path) -> list[tuple[Path, Path, int]]:
     return sources
 
 
-def _source_data(source: Path, relative: Path, codex_home: Path) -> bytes:
+def _render_auth_body(service_path: Path, platform: str) -> str:
+    """Render provider auth for the active platform.
+
+    macOS keeps the command-backed codex-opencode-go-service
+    print-bridge-token flow (Keychain owns the local bearer). Linux has no
+    managed service and renders env_key = "CODEX_OPENCODE_BRIDGE_TOKEN" so
+    Codex reads the same local bearer exported for the bridge process.
+    """
+    if platform == "darwin":
+        escaped = str(service_path).replace("\\", "\\\\").replace('"', '\\"')
+        return (
+            "[model_providers.opencode_go_bridge.auth]\n"
+            f'command = "{escaped}"\n'
+            'args = ["print-bridge-token"]\n'
+            "timeout_ms = 5000\n"
+            "refresh_interval_ms = 300000"
+        )
+    return 'env_key = "CODEX_OPENCODE_BRIDGE_TOKEN"'
+
+
+def _source_data(source: Path, relative: Path, codex_home: Path, platform: str) -> bytes:
     data = source.read_bytes()
-    if relative == Path("agents") / "v4-flash-worker.toml":
+    if relative == Path("agents") / "opencode-go-v4-worker.toml":
         service_path = (
             codex_home / "opencode-go-subagent" / "bin" / "codex-opencode-go-service"
         )
-        escaped = str(service_path).replace("\\", "\\\\").replace('"', '\\"')
-        data = data.replace(SERVICE_PLACEHOLDER.encode(), escaped.encode())
+        data = data.replace(
+            AUTH_BODY_LINE.encode(),
+            _render_auth_body(service_path, platform).encode(),
+        )
         catalog_path = codex_home / "opencode-go-subagent" / "deepseek-v4-flash-models.json"
         escaped_catalog = str(catalog_path).replace("\\", "\\\\").replace('"', '\\"')
         data = data.replace(MODEL_CATALOG_PLACEHOLDER.encode(), escaped_catalog.encode())
@@ -203,9 +226,12 @@ def _replace_agents_block(existing: str, block: str | None) -> str:
     return prefix + block.rstrip() + "\n"
 
 
-def install(repo_root: Path, codex_home: Path) -> JSON:
+def install(repo_root: Path, codex_home: Path, *, platform: str | None = None) -> JSON:
     repo_root = Path(repo_root).resolve()
     codex_home = Path(codex_home).expanduser().resolve()
+    platform = sys.platform if platform is None else platform
+    if platform not in {"darwin", "linux"}:
+        raise RuntimeError(f"unsupported install platform: {platform}")
     changed = False
     manifest_files: dict[str, str] = {}
     manifest_path = codex_home / MANIFEST_RELATIVE
@@ -225,7 +251,7 @@ def install(repo_root: Path, codex_home: Path) -> JSON:
         if not source.is_file():
             raise RuntimeError(f"missing install source: {source}")
         destination = codex_home / relative
-        data = _source_data(source, relative, codex_home)
+        data = _source_data(source, relative, codex_home, platform)
         if not destination.exists() or destination.read_bytes() == data:
             continue
         expected_old = old_files.get(str(relative))
@@ -243,7 +269,7 @@ def install(repo_root: Path, codex_home: Path) -> JSON:
     merged_agents = _replace_agents_block(existing_agents, block)
 
     for source, relative, mode in sources:
-        data = _source_data(source, relative, codex_home)
+        data = _source_data(source, relative, codex_home, platform)
         destination = codex_home / relative
         changed = _atomic_write(destination, data, mode) or changed
         manifest_files[str(relative)] = _sha256(data)
